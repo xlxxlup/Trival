@@ -158,16 +158,6 @@ function isOptionSelected(optionId) {
 				</ul>
 			</div>
 
-			<!-- 文本输入 -->
-			<div v-if="interventionRequest?.question_type === 'text'" class="field">
-				<label>请输入您的反馈或补充信息：</label>
-				<textarea
-					v-model="interventionResponse.text_input"
-					rows="4"
-					placeholder="请输入您的想法..."
-				/>
-			</div>
-
 			<!-- 选项选择 -->
 			<div v-if="interventionRequest?.options" class="options-group">
 				<label>请选择：</label>
@@ -183,6 +173,25 @@ function isOptionSelected(optionId) {
 					</span>
 					<span class="option-text">{{ option.text }}</span>
 				</div>
+			</div>
+
+			<!-- 文本输入 - 始终显示，让用户可以补充信息 -->
+			<div class="field text-input-field">
+				<label>
+					{{ interventionRequest?.question_type === 'text'
+						? '请输入您的反馈或补充信息：'
+						: '补充说明（可选）：' }}
+				</label>
+				<textarea
+					v-model="interventionResponse.text_input"
+					rows="4"
+					:placeholder="interventionRequest?.question_type === 'text'
+						? '请输入您的想法...'
+						: '如有其他需求或想法，请在此补充...'"
+				/>
+				<p class="input-hint">
+					💡 您可以在此补充任何额外的信息、特殊要求或想法
+				</p>
 			</div>
 
 			<div class="intervention-actions">
@@ -370,6 +379,18 @@ button:disabled {
 .option-text {
 	flex: 1;
 	color: #334155;
+}
+
+.text-input-field {
+	margin-top: 16px;
+}
+
+.input-hint {
+	font-size: 12px;
+	color: #64748b;
+	margin-top: 6px;
+	margin-bottom: 0;
+	font-style: italic;
 }
 
 .intervention-actions {

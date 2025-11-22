@@ -1,0 +1,12 @@
+1、asked_questions是干啥的：人工介入时，向人问的问题
+2、langchain版本变动，导致工具调用出问题了：在amusement_agent.py文件里272行这里的ai_message，发现一个问题。此时ai_message的内容是AIMessage(content='', additional_kwargs={'refusal': None}, response_metadata={'token_usage': {'completion_tokens': 353, 'prompt_tokens': 3012, 'total_tokens': 3365, 'completion_tokens_details': {'accepted_prediction_tokens': 0, 'audio_tokens': 0, 'reasoning_tokens': 320, 'rejected_prediction_tokens': 0}, 'prompt_tokens_details': {'audio_tokens': 0, 'cached_tokens': 0}}, 'model_provider': 'openai', 'model_name': 'gpt-5-mini', 'system_fingerprint': None, 'id': 'chatcmpl-CdzFbOFXcyXl962pSdH2HzmrNJEup', 'finish_reason': 'tool_calls', 'logprobs': None}, id='lc_run--101b6d82-89cd-4603-a1eb-216de2f51c8e-0', tool_calls=[{'name': 'get-station-code-of-citys', 'args': {'citys': '沈阳|长沙'}, 'id': 'call_LCaTJkPsTxBsEoMYzotRb5Cp', 'type': 'tool_call'}], usage_metadata={'input_tokens': 3012, 'output_tokens': 353, 'total_tokens': 3365, 'input_token_details': {'audio': 0, 'cache_read': 0}, 'output_token_details': {'audio': 0, 'reasoning': 320}})   我发现additional_kwargs里没有写关于工具调用的内容，但是ai_message却出现了关于工具调用的内容，例如tool_calls=[{'name': 'get-station-code-of-citys', 'args': {'citys': '沈阳|长沙'}, 是不是因为最近langchain有比较大的更新的缘故还是怎么回事？
+问题分析
+你说得对，这确实是 LangChain 最近版本更新 导致的结构变化：
+旧版本 LangChain
+工具调用信息在 ai_message.additional_kwargs['tool_calls'] 中
+新版本 LangChain
+工具调用信息被提升为 一级属性 ai_message.tool_calls
+additional_kwargs 中不再包含 tool_calls
+3、漏掉了一个消息，具体玩几天：解决了
+4、最后应该检查规划是否完成：解决了
+5、最后返回的内容不对:解决了

@@ -1,7 +1,9 @@
 '''
 机票mcp启动流程
 1、cmd切换到虚拟环境mineru
-2、切换到虚拟环境mineru后,在终端输入flight-ticket-mcp-server启动机票mcp服务
+2、set MCP_PORT=8080 # 端口是可以改的,不能和其他服务冲突
+3、set MCP_TRANSPORT=streamable-http
+4、切换到虚拟环境mineru后,在终端输入flight-ticket-mcp-server启动机票mcp服务
 '''
 
 import requests

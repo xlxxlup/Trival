@@ -6,6 +6,10 @@ import uvicorn
 import os
 
 from api.trival import trival_route
+from logging_config import setup_logging
+
+# 初始化日志系统
+setup_logging()
 
 app = FastAPI(title="旅游助手")
 
