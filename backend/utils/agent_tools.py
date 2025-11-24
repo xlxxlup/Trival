@@ -62,6 +62,109 @@ def get_llm():
     model = os.getenv("MODEL_NAME")
     api_key = os.getenv("MODEL_API_KEY")
     base_url = os.getenv("MODEL_BASE_URL")
-    
+
     llm = ChatOpenAI(model_name=model,openai_api_key=api_key,openai_api_base=base_url,temperature=0)
     return llm
+
+async def execute_tool_calls(ai_message, tools: list, logger_instance=None) -> list:
+    """
+    自定义工具调用函数，替代内置的ToolNode
+
+    Args:
+        ai_message: LLM返回的包含工具调用的消息
+        tools: 可用工具列表
+        logger_instance: 日志记录器实例
+
+    Returns:
+        包含ToolMessage的列表
+    """
+    from langchain_core.messages import ToolMessage
+    import json
+
+    log = logger_instance if logger_instance else logger
+    tool_messages = []
+
+    # 创建工具名称到工具对象的映射
+    tool_map = {tool.name: tool for tool in tools}
+
+    # 兼容新旧版本的tool_calls格式
+    tool_calls = []
+    if hasattr(ai_message, 'tool_calls') and ai_message.tool_calls:
+        tool_calls = ai_message.tool_calls
+        log.info(f"检测到工具调用（新版本格式），数量: {len(tool_calls)}")
+    elif hasattr(ai_message, 'additional_kwargs') and "tool_calls" in ai_message.additional_kwargs:
+        # 旧版本格式
+        raw_tool_calls = ai_message.additional_kwargs['tool_calls']
+        for tc in raw_tool_calls:
+            tool_calls.append({
+                'name': tc.get('function', {}).get('name'),
+                'args': json.loads(tc.get('function', {}).get('arguments', '{}')),
+                'id': tc.get('id', '')
+            })
+        log.info(f"检测到工具调用（旧版本格式），数量: {len(tool_calls)}")
+
+    if not tool_calls:
+        log.warning("未检测到任何工具调用")
+        return []
+
+    # 逐个执行工具调用
+    for idx, tool_call in enumerate(tool_calls, 1):
+        tool_name = tool_call.get('name', 'unknown')
+        tool_args = tool_call.get('args', {})
+        tool_id = tool_call.get('id', '')
+
+        log.info(f"=" * 60)
+        log.info(f"【执行工具 {idx}/{len(tool_calls)}】")
+        log.info(f"工具名称: {tool_name}")
+        log.info(f"工具参数: {json.dumps(tool_args, ensure_ascii=False, indent=2)}")
+        log.info(f"=" * 60)
+
+        # 查找对应的工具
+        if tool_name not in tool_map:
+            error_msg = f"工具 '{tool_name}' 不存在"
+            log.error(error_msg)
+            tool_messages.append(
+                ToolMessage(
+                    content=error_msg,
+                    tool_call_id=tool_id,
+                    name=tool_name
+                )
+            )
+            continue
+
+        # 执行工具
+        tool = tool_map[tool_name]
+        try:
+            log.info(f"🔧 开始执行工具: {tool_name}")
+
+            # 调用工具（始终使用异步调用）
+            result = await tool.ainvoke(tool_args)
+
+            log.info(f"✅ 工具执行成功")
+            log.info(f"工具返回结果（前500字符）: {str(result)[:500]}")
+
+            # 创建ToolMessage
+            tool_messages.append(
+                ToolMessage(
+                    content=str(result),
+                    tool_call_id=tool_id,
+                    name=tool_name
+                )
+            )
+
+        except Exception as e:
+            error_msg = f"工具执行失败: {type(e).__name__}: {str(e)}"
+            log.error(error_msg)
+            tool_messages.append(
+                ToolMessage(
+                    content=error_msg,
+                    tool_call_id=tool_id,
+                    name=tool_name
+                )
+            )
+
+    log.info(f"=" * 60)
+    log.info(f"所有工具执行完成，共执行 {len(tool_messages)} 个工具")
+    log.info(f"=" * 60)
+
+    return tool_messages

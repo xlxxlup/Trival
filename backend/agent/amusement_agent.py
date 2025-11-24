@@ -9,18 +9,17 @@ from pydantic import Field
 from langchain_core.prompts import PromptTemplate
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage,ToolMessage,AnyMessage
 from langchain_core.output_parsers import JsonOutputParser
-from langgraph.prebuilt import ToolNode
 from langgraph.types import Command
 from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END
 
 from utils import get_llm, get_mcp_tools
-from utils.agent_tools import retry_llm_call
+from utils.agent_tools import retry_llm_call, execute_tool_calls
 from utils.tools import tavily_search
 from config import trival_mcp_config
 
 
-from prompts import AMUSEMENT_SYSTEM_PLAN_TEMPLATE,AMUSEMENT_SYSYRM_REPLAN_TEMPLATE,AMUSEMENT_SYSTEM_JUDGE_TEMPLATE,AMUSEMENT_SUMMARY_PROMPT
+from prompts import AMUSEMENT_SYSTEM_PLAN_TEMPLATE,AMUSEMENT_SYSYRM_REPLAN_TEMPLATE,AMUSEMENT_SYSTEM_JUDGE_TEMPLATE,AMUSEMENT_SUMMARY_PROMPT,AMUSEMENT_EXECUTE_SINGLE_TASK_TEMPLATE
 from formatters import ReplanFormat,PlanFormat
 from formatters.amusement_format import AmusementFormat, PlanWithIntervention, ReplanWithIntervention, InterventionResponse
 
@@ -355,7 +354,7 @@ async def plan(state:AmusementState)->AmusementState:
 
 async def excute(state :AmusementState)->AmusementState:
     logger.info("=" * 80)
-    logger.info("【EXECUTE阶段开始】逐条执行计划任务...")
+    logger.info("【EXECUTE阶段开始】逐条执行计划任务，任务内支持多轮工具调用...")
 
     # 从state中获取plan数据，兼容新旧格式
     plan_data = state.get("plan", [])
@@ -411,49 +410,20 @@ async def excute(state :AmusementState)->AmusementState:
     logger.debug(f"已生成工具描述，共{len(trival_tools)}个工具")
 
     # 逐条执行任务
-    all_responses = []
+    all_tool_messages = []  # 收集所有工具调用的结果
     new_executed_tasks = executed_tasks.copy()
 
-    for idx, task in enumerate(pending_tasks, 1):
-        logger.info("=" * 60)
-        logger.info(f"【执行任务 {idx}/{len(pending_tasks)}】")
+    for task_idx, task in enumerate(pending_tasks, 1):
+        logger.info("=" * 80)
+        logger.info(f"【执行任务 {task_idx}/{len(pending_tasks)}】")
         logger.info(f"任务内容: {task}")
-        logger.info("=" * 60)
+        logger.info("=" * 80)
 
         # 使用简化的prompt模板，只包含当前这一条任务
         from langchain_core.prompts import PromptTemplate
 
-        # 简化的执行模板，专注于单个任务
-        simple_execute_template = """
-你是一个旅游规划执行助手，需要执行一个具体的任务。
-
-### 用户旅行需求
-- 出发地：{origin}
-- 目的地：{destination}
-- 出发日期：{date}
-- 旅行天数：{days}天
-- 出行人数：{people}人
-- 预算：{budget}元
-- 用户偏好：{preferences}
-
-### 当前任务
-{current_task}
-
-### 可用工具
-{available_tools}
-
-### 执行要求
-1. **仔细阅读当前任务**：理解任务要求调用哪些工具
-2. **调用相应的工具**：根据任务描述，调用对应的工具获取数据
-3. **不要输出文本**：只调用工具，不要输出任何解释
-4. **确保调用成功**：务必调用任务中要求的所有工具
-
-### 现在开始执行这个任务
-立即调用任务中要求的工具，不要输出任何文本。
-"""
-
         prompt = PromptTemplate(
-            template=simple_execute_template,
+            template=AMUSEMENT_EXECUTE_SINGLE_TASK_TEMPLATE,
             input_variables=["origin", "destination", "date", "days", "people", "budget", "preferences", "current_task", "available_tools"]
         )
 
@@ -470,127 +440,96 @@ async def excute(state :AmusementState)->AmusementState:
             "available_tools": available_tools_text
         }
 
-        execution_context = prompt.format(**input_data)
-        human_message = HumanMessage(content=execution_context)
+        # 任务内多轮对话机制
+        task_messages = []  # 当前任务的消息历史
+        max_rounds = 5  # 最多5轮对话
+        task_completed = False
 
-        logger.info(f"🤖 开始执行任务 {idx}，调用LLM...")
-        logger.debug(f"执行上下文长度: {len(execution_context)} 字符")
+        for round_num in range(1, max_rounds + 1):
+            logger.info(f"  【任务{task_idx} - 第{round_num}轮】")
 
-        # 【新增】记录完整的输入信息到日志
-        logger.debug("=" * 80)
-        logger.debug(f"【LLM输入信息 - 任务{idx}】")
-        logger.debug(f"完整Prompt:\n{execution_context}")
-        logger.debug("=" * 80)
+            # 构建当前轮的消息
+            if round_num == 1:
+                # 第一轮：使用完整的prompt
+                execution_context = prompt.format(**input_data)
+                current_messages = [HumanMessage(content=execution_context)]
+            else:
+                # 后续轮次：包含历史消息
+                current_messages = task_messages.copy()
 
-        response = await retry_llm_call(
-            llm_with_tools.ainvoke,
-            [human_message],
-            max_retries=1,
-            error_context=f"Execute阶段执行任务{idx}"
-        )
+            logger.debug(f"  当前消息数: {len(current_messages)}")
 
-        if response is None:
-            logger.error(f"任务{idx}执行失败（重试后仍失败）")
-            logger.warning(f"跳过任务: {task}")
-            continue  # 跳过这个任务，继续下一个
+            # 调用LLM
+            logger.info(f"  🤖 调用LLM...")
+            response = await retry_llm_call(
+                llm_with_tools.ainvoke,
+                current_messages,
+                max_retries=1,
+                error_context=f"Execute阶段任务{task_idx}第{round_num}轮"
+            )
 
-        logger.info(f"✅ 任务{idx} LLM响应完成")
+            if response is None:
+                logger.error(f"  任务{task_idx}第{round_num}轮LLM调用失败")
+                break
 
-        # 检查是否有工具调用
-        if hasattr(response, 'tool_calls') and response.tool_calls:
-            logger.info(f"🔧 检测到工具调用，数量: {len(response.tool_calls)}")
-            for i, tool_call in enumerate(response.tool_calls):
-                logger.info(f"  工具{i+1}: {tool_call.get('name', 'unknown')}")
-                logger.debug(f"  工具参数: {tool_call.get('args', {})}")
-        elif "tool_calls" in response.additional_kwargs and response.additional_kwargs['tool_calls']:
-            tool_calls = response.additional_kwargs['tool_calls']
-            logger.info(f"🔧 检测到工具调用，数量: {len(tool_calls)}")
-            for i, tool_call in enumerate(tool_calls):
-                logger.info(f"  工具{i+1}: {tool_call.get('function', {}).get('name', 'unknown')}")
-                logger.debug(f"  工具参数: {tool_call.get('function', {}).get('arguments', {})}")
+            # 将LLM响应加入消息历史
+            task_messages = current_messages + [response]
+
+            # 检查是否有工具调用
+            has_tool_calls = False
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                has_tool_calls = True
+                logger.info(f"  🔧 检测到工具调用，数量: {len(response.tool_calls)}")
+            elif "tool_calls" in response.additional_kwargs and response.additional_kwargs['tool_calls']:
+                has_tool_calls = True
+                logger.info(f"  🔧 检测到工具调用（旧格式），数量: {len(response.additional_kwargs['tool_calls'])}")
+
+            if not has_tool_calls:
+                logger.info(f"  ✓ 第{round_num}轮未检测到工具调用，任务可能已完成")
+                task_completed = True
+                break
+
+            # 执行工具调用
+            logger.info(f"  🔧 开始执行工具...")
+            tool_messages = await execute_tool_calls(response, trival_tools, logger)
+
+            if not tool_messages:
+                logger.warning(f"  ⚠️  工具执行失败或未返回结果")
+                break
+
+            # 将工具执行结果加入消息历史
+            task_messages.extend(tool_messages)
+            all_tool_messages.extend(tool_messages)  # 收集所有工具消息
+
+            logger.info(f"  ✓ 第{round_num}轮工具执行完成，已收集{len(tool_messages)}个工具结果")
+
+            # 检查是否达到最大轮次
+            if round_num == max_rounds:
+                logger.warning(f"  ⚠️  任务{task_idx}达到最大轮次({max_rounds})，强制结束")
+                break
+
+        # 任务执行完成
+        if task_completed:
+            logger.info(f"✓ 任务{task_idx}已完成（共{round_num}轮）")
         else:
-            logger.warning(f"⚠️  任务{idx}未检测到工具调用！")
-
-        # 记录响应
-        all_responses.append(response)
+            logger.warning(f"⚠️  任务{task_idx}未完全完成（执行了{round_num}轮）")
 
         # 标记任务已执行
         new_executed_tasks.append(task)
-        logger.info(f"✓ 任务{idx}已完成并记录")
 
     logger.info("=" * 80)
-    logger.info(f"【EXECUTE阶段结束】共执行了 {len(pending_tasks)} 个任务")
-    logger.info(f"累计已执行任务数: {len(new_executed_tasks)}/{len(tasks_to_execute)}")
+    logger.info(f"【EXECUTE阶段结束】")
+    logger.info(f"  - 共执行任务数: {len(pending_tasks)}")
+    logger.info(f"  - 累计已执行任务数: {len(new_executed_tasks)}/{len(tasks_to_execute)}")
+    logger.info(f"  - 收集到工具消息数: {len(all_tool_messages)}")
     logger.info("=" * 80)
 
-    # 返回所有响应和更新的executed_tasks
+    # 返回所有工具消息和更新的executed_tasks
     return {
-        "messages": all_responses,
+        "messages": all_tool_messages,  # 只返回工具消息，供replan使用
         "executed_tasks": new_executed_tasks
     }
-async def judge_tools(state:AmusementState)->AmusementState:
-    """
-    判断是否需要使用工具
-    检查最近的AIMessage中是否有工具调用
-    """
-    logger.info("=" * 80)
-    logger.info("【JUDGE_TOOLS】判断是否需要使用工具...")
 
-    # Execute阶段可能返回多个AIMessage，检查所有最近的AIMessage
-    messages = state.get("messages", [])
-
-    # 找出最后几个AIMessage（从Execute阶段返回的）
-    ai_messages = [msg for msg in messages if isinstance(msg, AIMessage)]
-
-    if not ai_messages:
-        logger.warning("⚠️  没有找到AIMessage")
-        logger.info("下一步: 跳过工具执行，直接进入replan阶段")
-        logger.info("=" * 80)
-        return "replan"
-
-    # 检查是否有任何一个AIMessage包含工具调用
-    has_any_tool_calls = False
-    total_tool_calls = 0
-
-    # 只检查最后的N条AIMessage（避免检查太多旧消息）
-    recent_ai_messages = ai_messages[-5:]  # 最多检查最后5条
-
-    for i, ai_message in enumerate(recent_ai_messages):
-        logger.debug(f"检查第{i+1}条AIMessage: {type(ai_message).__name__}")
-
-        # 兼容新旧版本的 LangChain
-        # 新版本: tool_calls 是一级属性
-        if hasattr(ai_message, 'tool_calls') and ai_message.tool_calls:
-            tool_calls = ai_message.tool_calls
-            logger.info(f"  ✓ 第{i+1}条消息包含工具调用（新版本格式），数量: {len(tool_calls)}")
-            for j, tool_call in enumerate(tool_calls):
-                tool_name = tool_call.get('name', 'unknown')
-                logger.info(f"    工具{j+1}: {tool_name}")
-            has_any_tool_calls = True
-            total_tool_calls += len(tool_calls)
-        # 旧版本: tool_calls 在 additional_kwargs 中
-        elif hasattr(ai_message, 'additional_kwargs') and "tool_calls" in ai_message.additional_kwargs.keys() and len(ai_message.additional_kwargs['tool_calls']) > 0:
-            tool_calls = ai_message.additional_kwargs['tool_calls']
-            logger.info(f"  ✓ 第{i+1}条消息包含工具调用（旧版本格式），数量: {len(tool_calls)}")
-            for j, tool_call in enumerate(tool_calls):
-                tool_name = tool_call.get('function', {}).get('name', 'unknown')
-                logger.info(f"    工具{j+1}: {tool_name}")
-            has_any_tool_calls = True
-            total_tool_calls += len(tool_calls)
-        else:
-            logger.debug(f"  ✗ 第{i+1}条消息未包含工具调用")
-
-    if has_any_tool_calls:
-        logger.info(f"✓ 检测到工具调用，总计: {total_tool_calls} 个")
-        logger.info("下一步: 执行工具调用（跳转到tool_node）")
-        logger.info("=" * 80)
-        return "use_tools"
-    else:
-        logger.info("✗ 未检测到任何工具调用")
-        logger.info("下一步: 跳过工具执行，直接进入replan阶段")
-        logger.info("=" * 80)
-        return "replan"
-    
 async def replan(state:AmusementState)->AmusementState:
     logger.info("=" * 80)
     logger.info("【REPLAN阶段开始】娱乐智能体重新规划并生成旅游攻略...")
@@ -985,7 +924,7 @@ async def get_graph() -> StateGraph:
     START → resume_router
         → (首次执行或普通循环) plan → check_intervention_after_plan
             → (需要介入) wait_user_plan → END
-            → (不需要) excute → judge_tools → tool_node/replan
+            → (不需要) excute → replan （工具调用在excute内部完成）
         → (从plan恢复) excute → ...
         → (从replan恢复) observation → ...
 
@@ -993,18 +932,15 @@ async def get_graph() -> StateGraph:
     - 用户响应后，API更新state的intervention_response
     - 重新调用graph.ainvoke(state)
     - resume_router根据intervention_stage决定从哪里继续
+
+    注意：工具调用机制已改为在excute节点内部完成多轮对话，不再使用独立的tool_node
     """
     logger.info("=" * 80)
     logger.info("【GET_GRAPH】开始构建Agent工作流图...")
 
-    logger.info("正在初始化工具...")
-    trival_tools = await get_mcp_trival_tools()
-    logger.info(f"工具初始化完成，总数: {len(trival_tools)}")
-    for i, tool in enumerate(trival_tools):
-        tool_name = tool.name if hasattr(tool, 'name') else str(tool)
-        logger.debug(f"  工具{i+1}: {tool_name}")
+    # 注意：现在工具调用在excute节点内部完成，不再需要单独的tool_node
+    logger.info("工作流采用新的execute内部多轮工具调用机制")
 
-    tool_node = ToolNode(trival_tools)
     builder = StateGraph(state_schema = AmusementState)
 
     # 添加所有节点
@@ -1014,8 +950,7 @@ async def get_graph() -> StateGraph:
         "plan",
         "check_intervention_after_plan",
         "wait_user_plan",  # 等待用户响应的节点
-        "excute",
-        "tool_node",
+        "excute",  # execute节点内部完成工具调用
         "replan",
         "check_intervention_after_replan",
         "wait_user_replan",  # 等待用户响应的节点
@@ -1027,7 +962,6 @@ async def get_graph() -> StateGraph:
     builder.add_node("check_intervention_after_plan", check_intervention_after_plan)
     builder.add_node("wait_user_plan", wait_user_plan)
     builder.add_node("excute", excute)
-    builder.add_node("tool_node", tool_node)
     builder.add_node("replan", replan)
     builder.add_node("check_intervention_after_replan", check_intervention_after_replan)
     builder.add_node("wait_user_replan", wait_user_replan)
@@ -1054,15 +988,9 @@ async def get_graph() -> StateGraph:
     builder.add_edge("wait_user_replan", END)
     logger.debug("  添加边: wait_user_replan → END")
 
-    # 4. excute的正常流程
-    builder.add_conditional_edges(
-        "excute",
-        judge_tools,
-        {"use_tools": "tool_node", "replan": "replan"}
-    )
-    logger.debug("  添加条件边: excute → judge_tools → {use_tools: tool_node, replan: replan}")
-    builder.add_edge("tool_node", "replan")
-    logger.debug("  添加边: tool_node → replan")
+    # 4. excute的正常流程 - 直接到replan（工具调用在excute内部完成）
+    builder.add_edge("excute", "replan")
+    logger.debug("  添加边: excute → replan （工具调用在excute内部完成）")
 
     # 5. replan的正常流程
     builder.add_edge("replan", "check_intervention_after_replan")

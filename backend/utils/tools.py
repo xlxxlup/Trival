@@ -7,7 +7,7 @@ load_dotenv()
 @tool
 def tavily_search(query: str,limit_k:int=5) -> str:
     """该工具可以搜索互联网上的信息."""
-    api_key = os.getenv("TAVILY_API_KEY")
+    api_key = "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"
     tavily_client = TavilyClient(api_key = api_key)
     results = tavily_client.search(query)
     return results

@@ -242,16 +242,46 @@ async def travel(data: TrivalFormat):
                     amusement_info_dict = amusement_info
                 logger.debug(f"攻略信息已转换为字典")
 
-            logger.info(f"规划步骤数: {len(final_state.get('plan', []))}")
-            logger.info(f"优化规划步骤数: {len(final_state.get('replan', []))}")
+            # 处理plan格式（新旧兼容）
+            plan_data = final_state.get('plan')
+            plan_list = None
+            if plan_data:
+                if isinstance(plan_data, dict):
+                    # 新格式：合并overview和actionable_tasks
+                    overview = plan_data.get('overview', [])
+                    actionable_tasks = plan_data.get('actionable_tasks', [])
+                    plan_list = overview + actionable_tasks
+                    logger.debug(f"plan已转换为列表格式（新格式，长度={len(plan_list)}）")
+                else:
+                    # 旧格式：直接使用
+                    plan_list = plan_data
+                    logger.debug(f"plan使用旧格式（长度={len(plan_list)}）")
+
+            # 处理replan格式（新旧兼容）
+            replan_data = final_state.get('replan')
+            replan_list = None
+            if replan_data:
+                if isinstance(replan_data, dict):
+                    # 新格式：合并overview和actionable_tasks
+                    overview = replan_data.get('overview', [])
+                    actionable_tasks = replan_data.get('actionable_tasks', [])
+                    replan_list = overview + actionable_tasks
+                    logger.debug(f"replan已转换为列表格式（新格式，长度={len(replan_list)}）")
+                else:
+                    # 旧格式：直接使用
+                    replan_list = replan_data
+                    logger.debug(f"replan使用旧格式（长度={len(replan_list)}）")
+
+            logger.info(f"规划步骤数: {len(plan_list) if plan_list else 0}")
+            logger.info(f"优化规划步骤数: {len(replan_list) if replan_list else 0}")
             logger.info(f"攻略信息: {'已生成' if amusement_info_dict else '未生成'}")
 
             response = TravelResponse(
                 session_id=session_id,
                 status="completed",
                 need_intervention=False,
-                plan=final_state.get("plan"),
-                replan=final_state.get("replan"),
+                plan=plan_list,
+                replan=replan_list,
                 amusement_info=amusement_info_dict
             )
             logger.info("✓ 返回完整旅游规划结果")
@@ -354,16 +384,46 @@ async def resume_travel(data: InterventionResponseModel):
                     amusement_info_dict = amusement_info
                 logger.debug(f"攻略信息已转换为字典")
 
-            logger.info(f"规划步骤数: {len(final_state.get('plan', []))}")
-            logger.info(f"优化规划步骤数: {len(final_state.get('replan', []))}")
+            # 处理plan格式（新旧兼容）
+            plan_data = final_state.get('plan')
+            plan_list = None
+            if plan_data:
+                if isinstance(plan_data, dict):
+                    # 新格式：合并overview和actionable_tasks
+                    overview = plan_data.get('overview', [])
+                    actionable_tasks = plan_data.get('actionable_tasks', [])
+                    plan_list = overview + actionable_tasks
+                    logger.debug(f"plan已转换为列表格式（新格式，长度={len(plan_list)}）")
+                else:
+                    # 旧格式：直接使用
+                    plan_list = plan_data
+                    logger.debug(f"plan使用旧格式（长度={len(plan_list)}）")
+
+            # 处理replan格式（新旧兼容）
+            replan_data = final_state.get('replan')
+            replan_list = None
+            if replan_data:
+                if isinstance(replan_data, dict):
+                    # 新格式：合并overview和actionable_tasks
+                    overview = replan_data.get('overview', [])
+                    actionable_tasks = replan_data.get('actionable_tasks', [])
+                    replan_list = overview + actionable_tasks
+                    logger.debug(f"replan已转换为列表格式（新格式，长度={len(replan_list)}）")
+                else:
+                    # 旧格式：直接使用
+                    replan_list = replan_data
+                    logger.debug(f"replan使用旧格式（长度={len(replan_list)}）")
+
+            logger.info(f"规划步骤数: {len(plan_list) if plan_list else 0}")
+            logger.info(f"优化规划步骤数: {len(replan_list) if replan_list else 0}")
             logger.info(f"攻略信息: {'已生成' if amusement_info_dict else '未生成'}")
 
             response = TravelResponse(
                 session_id=session_id,
                 status="completed",
                 need_intervention=False,
-                plan=final_state.get("plan"),
-                replan=final_state.get("replan"),
+                plan=plan_list,
+                replan=replan_list,
                 amusement_info=amusement_info_dict
             )
             logger.info("✓ 返回完整旅游规划结果")
