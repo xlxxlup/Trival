@@ -58,6 +58,18 @@ def setup_logging():
                 "handlers": ["console"],
                 "level": "DEBUG",
                 "propagate": False
+            },
+            # 过滤httpcore的详细DEBUG日志
+            "httpcore": {
+                "handlers": ["console"],
+                "level": "WARNING",  # 只记录WARNING及以上级别
+                "propagate": False
+            },
+            # 保留httpx的INFO日志（如HTTP请求日志）
+            "httpx": {
+                "handlers": ["console"],
+                "level": "INFO",  # 保留INFO及以上级别
+                "propagate": False
             }
         },
         "root": {

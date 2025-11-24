@@ -164,9 +164,16 @@ class InterventionResponse(BaseModel):
 
 class PlanWithIntervention(BaseModel):
     """带人工介入标识的规划"""
-    plan: List[str] = Field(description="旅游规划")
+    overview: List[str] = Field(description="概述性规划，描述整体思路和框架，不需要执行工具")
+    actionable_tasks: List[str] = Field(description="需要执行工具的具体任务清单，每条任务明确说明需要调用什么工具、查询什么信息")
     need_intervention: bool = Field(default=False, description="是否需要人工介入")
     intervention_request: Optional[InterventionRequest] = Field(default=None, description="人工介入请求")
+
+    # 为了向后兼容，保留plan字段，但在新代码中应使用overview和actionable_tasks
+    @property
+    def plan(self) -> List[str]:
+        """向后兼容的plan属性"""
+        return self.overview + self.actionable_tasks
 
 class ReplanWithIntervention(BaseModel):
     """带人工介入标识的重新规划"""
