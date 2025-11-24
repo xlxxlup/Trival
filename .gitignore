@@ -1,2 +1,13 @@
 backend/logs
 logs/*
+backend/__pycache__
+backend/agent/__pycache__
+backend/api/__pycache__
+backend/config/__pycache__
+backend/formatters/__pycache__
+backend/prompts/__pycache__
+backend/utils/__pycache__
+backend/api/model/__pycache__
+backend/session_store.json
+.vscode/
+.claude/
