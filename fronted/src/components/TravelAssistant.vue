@@ -212,16 +212,185 @@ function isOptionSelected(optionId) {
 
 			<!-- 规划列表 -->
 			<div v-if="planResult.replan" class="result-section">
-				<h3>旅游规划</h3>
+				<h3>📋 旅游规划</h3>
 				<ul>
 					<li v-for="(item, index) in planResult.replan" :key="index">{{ item }}</li>
 				</ul>
 			</div>
 
-			<!-- 旅游攻略信息 -->
+			<!-- 旅游攻略信息 - 友好展示 -->
 			<div v-if="planResult.amusement_info" class="result-section">
-				<h3>详细攻略</h3>
-				<pre>{{ JSON.stringify(planResult.amusement_info, null, 2) }}</pre>
+				<h3>✈️ 详细攻略</h3>
+
+				<!-- 基本信息 -->
+				<div class="info-card">
+					<h4>📍 基本信息</h4>
+					<div class="info-row">
+						<span class="label">目的地：</span>
+						<span>{{ planResult.amusement_info.destination }}</span>
+					</div>
+					<div class="info-row">
+						<span class="label">出行日期：</span>
+						<span>{{ planResult.amusement_info.travel_dates }}</span>
+					</div>
+					<div class="info-row">
+						<span class="label">行程天数：</span>
+						<span>{{ planResult.amusement_info.duration }}天</span>
+					</div>
+					<div class="info-row summary">
+						<span class="label">行程概要：</span>
+						<span>{{ planResult.amusement_info.summary }}</span>
+					</div>
+				</div>
+
+				<!-- 交通信息 -->
+				<div v-if="planResult.amusement_info.transportation" class="info-card">
+					<h4>🚄 交通信息</h4>
+
+					<!-- 去程火车 -->
+					<div v-if="planResult.amusement_info.transportation.outbound && planResult.amusement_info.transportation.outbound.length > 0">
+						<h5>去程车次</h5>
+						<div class="train-list">
+							<div v-for="(train, idx) in planResult.amusement_info.transportation.outbound" :key="idx" class="train-item">
+								<div class="train-no">{{ train.train_no }}</div>
+								<div class="train-details">
+									<div>{{ train.from_station }} → {{ train.to_station }}</div>
+									<div>{{ train.departure_time }} - {{ train.arrival_time }} ({{ train.duration }})</div>
+									<div v-if="train.second_class_price">二等座：¥{{ train.second_class_price }}</div>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- 返程火车 -->
+					<div v-if="planResult.amusement_info.transportation.return_trip && planResult.amusement_info.transportation.return_trip.length > 0">
+						<h5>返程车次</h5>
+						<div class="train-list">
+							<div v-for="(train, idx) in planResult.amusement_info.transportation.return_trip" :key="idx" class="train-item">
+								<div class="train-no">{{ train.train_no }}</div>
+								<div class="train-details">
+									<div>{{ train.from_station }} → {{ train.to_station }}</div>
+									<div>{{ train.departure_time }} - {{ train.arrival_time }} ({{ train.duration }})</div>
+									<div v-if="train.second_class_price">二等座：¥{{ train.second_class_price }}</div>
+								</div>
+							</div>
+						</div>
+					</div>
+
+					<!-- 当地交通 -->
+					<div v-if="planResult.amusement_info.transportation.local_transport" class="local-transport">
+						<h5>当地交通建议</h5>
+						<p>{{ planResult.amusement_info.transportation.local_transport }}</p>
+					</div>
+				</div>
+
+				<!-- 住宿信息 -->
+				<div v-if="planResult.amusement_info.accommodation && planResult.amusement_info.accommodation.length > 0" class="info-card">
+					<h4>🏨 住宿推荐</h4>
+					<div class="hotel-list">
+						<div v-for="(hotel, idx) in planResult.amusement_info.accommodation.slice(0, 3)" :key="idx" class="hotel-item">
+							<div class="hotel-name">{{ hotel.hotel_name }}</div>
+							<div class="hotel-details">
+								<span v-if="hotel.hotel_star">⭐ {{ hotel.hotel_star }}</span>
+								<span v-if="hotel.rating">评分：{{ hotel.rating }}</span>
+								<span v-if="hotel.price_per_night">¥{{ hotel.price_per_night }}/晚</span>
+							</div>
+							<div v-if="hotel.address" class="hotel-address">📍 {{ hotel.address }}</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- 天气信息 -->
+				<div v-if="planResult.amusement_info.weather && planResult.amusement_info.weather.length > 0" class="info-card">
+					<h4>🌤️ 天气预报</h4>
+					<div class="weather-list">
+						<div v-for="(day, idx) in planResult.amusement_info.weather" :key="idx" class="weather-item">
+							<div class="weather-date">{{ day.date }}</div>
+							<div class="weather-desc">{{ day.weather_desc }}</div>
+							<div class="weather-temp" v-if="day.temperature_high && day.temperature_low">
+								{{ day.temperature_low }}°C ~ {{ day.temperature_high }}°C
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- 景点信息 -->
+				<div v-if="planResult.amusement_info.attractions && planResult.amusement_info.attractions.length > 0" class="info-card">
+					<h4>🎯 主要景点</h4>
+					<div class="poi-list">
+						<div v-for="(poi, idx) in planResult.amusement_info.attractions.slice(0, 5)" :key="idx" class="poi-item">
+							<div class="poi-name">{{ poi.name }}</div>
+							<div v-if="poi.rating" class="poi-rating">⭐ {{ poi.rating }}</div>
+							<div v-if="poi.address" class="poi-address">📍 {{ poi.address }}</div>
+							<div v-if="poi.description" class="poi-desc">{{ poi.description }}</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- 餐厅推荐 -->
+				<div v-if="planResult.amusement_info.restaurants && planResult.amusement_info.restaurants.length > 0" class="info-card">
+					<h4>🍽️ 餐厅推荐</h4>
+					<div class="poi-list">
+						<div v-for="(poi, idx) in planResult.amusement_info.restaurants.slice(0, 5)" :key="idx" class="poi-item">
+							<div class="poi-name">{{ poi.name }}</div>
+							<div v-if="poi.rating" class="poi-rating">⭐ {{ poi.rating }}</div>
+							<div v-if="poi.avg_cost" class="poi-cost">人均：¥{{ poi.avg_cost }}</div>
+							<div v-if="poi.address" class="poi-address">📍 {{ poi.address }}</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- 夜生活 -->
+				<div v-if="planResult.amusement_info.bars_nightlife && planResult.amusement_info.bars_nightlife.length > 0" class="info-card">
+					<h4>🌃 酒吧与夜生活</h4>
+					<div class="poi-list">
+						<div v-for="(poi, idx) in planResult.amusement_info.bars_nightlife.slice(0, 5)" :key="idx" class="poi-item">
+							<div class="poi-name">{{ poi.name }}</div>
+							<div v-if="poi.rating" class="poi-rating">⭐ {{ poi.rating }}</div>
+							<div v-if="poi.opening_hours" class="poi-hours">⏰ {{ poi.opening_hours }}</div>
+							<div v-if="poi.address" class="poi-address">📍 {{ poi.address }}</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- 预算明细 -->
+				<div v-if="planResult.amusement_info.budget_breakdown" class="info-card">
+					<h4>💰 预算明细</h4>
+					<div class="budget-list">
+						<div v-if="planResult.amusement_info.budget_breakdown.transportation" class="budget-item">
+							<span>交通费用：</span>
+							<span>¥{{ planResult.amusement_info.budget_breakdown.transportation }}</span>
+						</div>
+						<div v-if="planResult.amusement_info.budget_breakdown.accommodation" class="budget-item">
+							<span>住宿费用：</span>
+							<span>¥{{ planResult.amusement_info.budget_breakdown.accommodation }}</span>
+						</div>
+						<div v-if="planResult.amusement_info.budget_breakdown.meals" class="budget-item">
+							<span>餐饮费用：</span>
+							<span>¥{{ planResult.amusement_info.budget_breakdown.meals }}</span>
+						</div>
+						<div v-if="planResult.amusement_info.budget_breakdown.attractions" class="budget-item">
+							<span>景点门票：</span>
+							<span>¥{{ planResult.amusement_info.budget_breakdown.attractions }}</span>
+						</div>
+						<div v-if="planResult.amusement_info.budget_breakdown.entertainment" class="budget-item">
+							<span>娱乐费用：</span>
+							<span>¥{{ planResult.amusement_info.budget_breakdown.entertainment }}</span>
+						</div>
+						<div class="budget-item total">
+							<span>总计：</span>
+							<span>¥{{ planResult.amusement_info.budget_breakdown.total }}</span>
+						</div>
+					</div>
+				</div>
+
+				<!-- 旅行贴士 -->
+				<div v-if="planResult.amusement_info.tips && planResult.amusement_info.tips.length > 0" class="info-card">
+					<h4>💡 旅行贴士</h4>
+					<ul class="tips-list">
+						<li v-for="(tip, idx) in planResult.amusement_info.tips" :key="idx">{{ tip }}</li>
+					</ul>
+				</div>
 			</div>
 		</div>
 	</div>
@@ -284,14 +453,6 @@ button:disabled {
 .error {
 	color: #ef4444;
 	margin: 8px 0;
-}
-
-.result pre {
-	background: #0b1020;
-	color: #d1e7ff;
-	padding: 12px;
-	border-radius: 8px;
-	overflow-x: auto;
 }
 
 /* 人工介入样式 */
@@ -397,26 +558,280 @@ button:disabled {
 	margin-top: 16px;
 }
 
-.result-section {
+/* 结果展示样式 */
+.result {
+	margin-top: 24px;
+}
+
+.result h2 {
+	font-size: 22px;
+	color: #1e293b;
 	margin-bottom: 20px;
+	border-bottom: 2px solid #6366f1;
+	padding-bottom: 8px;
+}
+
+.result-section {
+	margin-bottom: 24px;
 }
 
 .result-section h3 {
-	font-size: 16px;
+	font-size: 18px;
 	color: #334155;
-	margin-bottom: 12px;
+	margin-bottom: 16px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
 }
 
-.result-section ul {
+.result-section > ul {
 	background: #f1f5f9;
 	padding: 16px 16px 16px 36px;
 	border-radius: 8px;
 	margin: 0;
+	list-style: decimal;
 }
 
-.result-section li {
+.result-section > ul li {
 	margin-bottom: 8px;
 	color: #475569;
+	line-height: 1.6;
+}
+
+/* 信息卡片样式 */
+.info-card {
+	background: #ffffff;
+	border: 1px solid #e2e8f0;
+	border-radius: 12px;
+	padding: 20px;
+	margin-bottom: 16px;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.info-card h4 {
+	font-size: 16px;
+	color: #1e293b;
+	margin-bottom: 16px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	border-bottom: 1px solid #e2e8f0;
+	padding-bottom: 8px;
+}
+
+.info-card h5 {
+	font-size: 14px;
+	color: #475569;
+	margin: 16px 0 12px 0;
+}
+
+/* 基本信息行 */
+.info-row {
+	display: flex;
+	margin-bottom: 10px;
+	line-height: 1.6;
+}
+
+.info-row .label {
+	font-weight: 600;
+	color: #64748b;
+	min-width: 100px;
+}
+
+.info-row.summary {
+	flex-direction: column;
+}
+
+.info-row.summary .label {
+	margin-bottom: 4px;
+}
+
+/* 火车票列表 */
+.train-list {
+	display: grid;
+	gap: 12px;
+}
+
+.train-item {
+	display: flex;
+	gap: 12px;
+	padding: 12px;
+	background: #f8fafc;
+	border-radius: 8px;
+	border: 1px solid #e2e8f0;
+}
+
+.train-no {
+	font-size: 18px;
+	font-weight: bold;
+	color: #6366f1;
+	min-width: 80px;
+}
+
+.train-details {
+	flex: 1;
+	font-size: 14px;
+	color: #475569;
+	line-height: 1.6;
+}
+
+/* 酒店列表 */
+.hotel-list {
+	display: grid;
+	gap: 12px;
+}
+
+.hotel-item {
+	padding: 14px;
+	background: #f8fafc;
+	border-radius: 8px;
+	border: 1px solid #e2e8f0;
+}
+
+.hotel-name {
+	font-size: 16px;
+	font-weight: 600;
+	color: #1e293b;
+	margin-bottom: 8px;
+}
+
+.hotel-details {
+	display: flex;
+	gap: 12px;
+	font-size: 13px;
+	color: #64748b;
+	margin-bottom: 6px;
+}
+
+.hotel-address {
+	font-size: 13px;
+	color: #64748b;
+}
+
+/* 天气列表 */
+.weather-list {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+	gap: 12px;
+}
+
+.weather-item {
+	padding: 12px;
+	background: #f0f9ff;
+	border-radius: 8px;
+	text-align: center;
+	border: 1px solid #bae6fd;
+}
+
+.weather-date {
+	font-size: 13px;
+	color: #0369a1;
+	margin-bottom: 6px;
+	font-weight: 600;
+}
+
+.weather-desc {
+	font-size: 15px;
+	color: #0c4a6e;
+	margin-bottom: 4px;
+}
+
+.weather-temp {
+	font-size: 13px;
+	color: #0c4a6e;
+}
+
+/* POI列表（景点/餐厅/酒吧） */
+.poi-list {
+	display: grid;
+	gap: 12px;
+}
+
+.poi-item {
+	padding: 14px;
+	background: #fef3c7;
+	border-radius: 8px;
+	border: 1px solid #fde047;
+}
+
+.poi-name {
+	font-size: 15px;
+	font-weight: 600;
+	color: #78350f;
+	margin-bottom: 6px;
+}
+
+.poi-rating, .poi-cost, .poi-hours {
+	font-size: 13px;
+	color: #92400e;
+	margin-bottom: 4px;
+}
+
+.poi-address {
+	font-size: 12px;
+	color: #a16207;
+	margin-top: 6px;
+}
+
+.poi-desc {
+	font-size: 13px;
+	color: #92400e;
+	margin-top: 8px;
+	line-height: 1.5;
+}
+
+/* 预算列表 */
+.budget-list {
+	display: grid;
+	gap: 10px;
+}
+
+.budget-item {
+	display: flex;
+	justify-content: space-between;
+	padding: 10px 14px;
+	background: #f0fdf4;
+	border-radius: 6px;
+	font-size: 14px;
+	color: #166534;
+}
+
+.budget-item.total {
+	background: #dcfce7;
+	font-weight: bold;
+	font-size: 16px;
+	border: 2px solid #22c55e;
+}
+
+/* 贴士列表 */
+.tips-list {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.tips-list li {
+	padding: 10px 14px;
+	margin-bottom: 8px;
+	background: #fef2f2;
+	border-left: 3px solid #ef4444;
+	border-radius: 4px;
+	color: #991b1b;
+	font-size: 14px;
+	line-height: 1.6;
+}
+
+.local-transport {
+	margin-top: 16px;
+}
+
+.local-transport p {
+	padding: 12px;
+	background: #f1f5f9;
+	border-radius: 6px;
+	color: #475569;
+	line-height: 1.6;
+	margin: 8px 0 0 0;
 }
 </style>
 

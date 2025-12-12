@@ -2,18 +2,18 @@ trival_mcp_config = {
     # 高德地图 - 路线规划、POI搜索
     "amap-maps": {
       "transport": "streamable_http",
-      "url": "https://mcp.api-inference.modelscope.net/338c6d27248f4b/mcp"
+      "url": "https://mcp.api-inference.modelscope.net/c2c9f72900af4b/mcp"
     },
     # 12306火车票查询 - 提供详细的火车票信息
     "12306-mcp": {
-        "transport": "streamable_http",
-        "url": "https://mcp.api-inference.modelscope.net/1183ae8a54974b/mcp"
+      "transport": "streamable_http",
+      "url": "https://mcp.api-inference.modelscope.net/17d96fdf3db846/mcp"
     },
     # 机票查询 - 提供详细的航班信息
-    "flight-ticket-mcp": {
-        "transport": "streamable_http",
-        "url": "https://mcp.api-inference.modelscope.net/88db201fc7b448/mcp"
-    }
+    # "flight-ticket-mcp": {
+    #     "transport": "streamable_http",
+    #     "url": "https://mcp.api-inference.modelscope.net/88db201fc7b448/mcp"
+    # }
 }
 
 # 保留单独的配置供其他用途

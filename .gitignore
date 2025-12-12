@@ -11,3 +11,5 @@ backend/api/model/__pycache__
 backend/session_store.json
 .vscode/
 .claude/
+langchain/*
+langgraph/*

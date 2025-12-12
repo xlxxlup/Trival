@@ -51,6 +51,8 @@ class AmusementState(TypedDict):
     # Execute阶段任务追踪
     executed_tasks: Annotated[list[str], Field(description="已执行的任务列表，用于避免重复执行", default=[])]
     current_task_index: Annotated[int, Field(description="当前执行到第几条任务", default=0)]
+    # Observation结果
+    observation_result: Annotated[dict, Field(description="Observation阶段的判断结果，包含缺失项和建议", default=None)]
 # 获取mcp工具
 async def get_mcp_trival_tools():
     global _mcp_trival_tools
@@ -230,9 +232,24 @@ async def plan(state:AmusementState)->AmusementState:
     else:
         collected_info_str = "尚未询问任何问题"
 
+    # 格式化observation反馈（如果有）
+    observation_result = state.get("observation_result")
+    if observation_result and not observation_result.get("satisfied", True):
+        observation_feedback = "**上一轮执行存在以下问题：**\n\n"
+        observation_feedback += "缺失项：\n"
+        for item in observation_result.get("missing_items", []):
+            observation_feedback += f"- {item}\n"
+        observation_feedback += "\n建议：\n"
+        for suggestion in observation_result.get("suggestions", []):
+            observation_feedback += f"- {suggestion}\n"
+        logger.info("检测到observation反馈，将传递给LLM进行增量规划")
+        logger.debug(f"Observation反馈内容: {observation_feedback}")
+    else:
+        observation_feedback = "无（首次规划或上一轮已完成）"
+
     prompt = PromptTemplate(
             template = AMUSEMENT_SYSTEM_PLAN_TEMPLATE,
-            input_variables=["origin","destination","date","days","people","budget","preferences","plan","replan","collected_info","messages"],
+            input_variables=["origin","destination","date","days","people","budget","preferences","plan","replan","collected_info","observation_feedback","messages"],
             partial_variables={"json_format":parser.get_format_instructions()},
     )
     chain = prompt | llm | parser
@@ -253,6 +270,7 @@ async def plan(state:AmusementState)->AmusementState:
         "plan": state.get("plan", []),
         "replan": state.get("replan", []),
         "collected_info": collected_info_str,
+        "observation_feedback": observation_feedback,
         "messages": recent_messages
     }
 
@@ -472,6 +490,18 @@ async def excute(state :AmusementState)->AmusementState:
                 logger.error(f"  任务{task_idx}第{round_num}轮LLM调用失败")
                 break
 
+            # 【新增】记录LLM response中的工具调用信息
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                logger.info(f"  📋 LLM返回的工具调用列表：")
+                for idx, tc in enumerate(response.tool_calls, 1):
+                    logger.info(f"     {idx}. 工具: {tc.get('name', 'unknown')}, ID: {tc.get('id', 'N/A')}")
+                    logger.debug(f"        参数: {tc.get('args', {})}")
+            elif "tool_calls" in response.additional_kwargs and response.additional_kwargs['tool_calls']:
+                logger.info(f"  📋 LLM返回的工具调用列表（旧格式）：")
+                for idx, tc in enumerate(response.additional_kwargs['tool_calls'], 1):
+                    logger.info(f"     {idx}. 工具: {tc.get('function', {}).get('name', 'unknown')}")
+                    logger.debug(f"        参数: {tc.get('function', {}).get('arguments', {})}")
+
             # 将LLM响应加入消息历史
             task_messages = current_messages + [response]
 
@@ -485,7 +515,7 @@ async def excute(state :AmusementState)->AmusementState:
                 logger.info(f"  🔧 检测到工具调用（旧格式），数量: {len(response.additional_kwargs['tool_calls'])}")
 
             if not has_tool_calls:
-                logger.info(f"  ✓ 第{round_num}轮未检测到工具调用，任务可能已完成")
+                logger.info(f"  ✓ 第{round_num}轮未检测到工具调用，任务已完成")
                 task_completed = True
                 break
 
@@ -503,9 +533,11 @@ async def excute(state :AmusementState)->AmusementState:
 
             logger.info(f"  ✓ 第{round_num}轮工具执行完成，已收集{len(tool_messages)}个工具结果")
 
-            # 检查是否达到最大轮次
+            # 【修复】检查是否达到最大轮次
             if round_num == max_rounds:
                 logger.warning(f"  ⚠️  任务{task_idx}达到最大轮次({max_rounds})，强制结束")
+                # 【修复】最后一轮如果执行了工具，也应该标记为完成
+                task_completed = True
                 break
 
         # 任务执行完成
@@ -750,11 +782,19 @@ async def observation(state:AmusementState) -> Command[Literal["__end__", "plan"
     if response is None:
         logger.error("Observation阶段LLM调用失败（重试后仍失败）")
         logger.warning("默认判断为不满足需求，需要重新规划")
+        # 提供默认的缺失原因
+        update = {
+            "observation_result": {
+                "satisfied": False,
+                "missing_items": ["系统判断失败，建议重新生成攻略"],
+                "suggestions": ["重新执行完整流程"]
+            }
+        }
         goto = "plan"
         logger.info(f"下一步: {goto}")
         logger.info("【OBSERVATION阶段结束】")
         logger.info("=" * 80)
-        return Command(goto=goto, update=None)
+        return Command(goto=goto, update=update)
 
     logger.info("✅ LLM判断完成")
     logger.debug(f"Observation阶段LLM完整响应内容: {response.content}")
@@ -762,17 +802,61 @@ async def observation(state:AmusementState) -> Command[Literal["__end__", "plan"
 
     goto = None
     update = None
-    if '1' in response.content:
+
+    # 尝试解析响应
+    response_text = response.content.strip()
+
+    if '1' in response_text and len(response_text) < 10:
+        # 简单的满足判断
         goto = "__end__"
         logger.info("✓ 判断结果: 攻略满足用户需求，流程结束")
     else:
-        goto = "plan"
-        logger.warning("⚠️  判断结果: 攻略不满足需求，需要重新规划")
+        # 尝试解析JSON格式的详细反馈
+        try:
+            # 如果响应包含```json，提取JSON部分
+            if '```json' in response_text:
+                json_start = response_text.find('```json') + 7
+                json_end = response_text.find('```', json_start)
+                json_text = response_text[json_start:json_end].strip()
+            elif '```' in response_text:
+                json_start = response_text.find('```') + 3
+                json_end = response_text.find('```', json_start)
+                json_text = response_text[json_start:json_end].strip()
+            elif '{' in response_text:
+                # 直接提取JSON对象
+                json_start = response_text.find('{')
+                json_end = response_text.rfind('}') + 1
+                json_text = response_text[json_start:json_end]
+            else:
+                json_text = response_text
+
+            observation_result = json.loads(json_text)
+            logger.info("⚠️  判断结果: 攻略不满足需求")
+            logger.info("缺失项:")
+            for item in observation_result.get("missing_items", []):
+                logger.info(f"  - {item}")
+            logger.info("建议:")
+            for suggestion in observation_result.get("suggestions", []):
+                logger.info(f"  - {suggestion}")
+
+            update = {"observation_result": observation_result}
+            goto = "plan"
+        except json.JSONDecodeError as e:
+            logger.error(f"无法解析observation结果为JSON: {e}")
+            logger.warning("使用默认判断：不满足需求")
+            update = {
+                "observation_result": {
+                    "satisfied": False,
+                    "missing_items": ["LLM返回格式错误，无法解析详细原因"],
+                    "suggestions": ["重新生成攻略"]
+                }
+            }
+            goto = "plan"
 
     logger.info(f"下一步: {goto}")
     logger.info("【OBSERVATION阶段结束】")
     logger.info("=" * 80)
-    return Command(goto=goto,update=update)
+    return Command(goto=goto, update=update)
 
 async def resume_router(state: AmusementState) -> Command[Literal["plan", "replan"]]:
     """
