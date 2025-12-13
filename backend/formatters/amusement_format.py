@@ -162,10 +162,16 @@ class InterventionResponse(BaseModel):
     text_input: Optional[str] = Field(default=None, description="用户的文本输入")
     selected_options: Optional[List[str]] = Field(default=None, description="用户选择的选项ID列表")
 
+class TaskCategory(BaseModel):
+    """任务类别（包含查询任务和总结任务）"""
+    category: str = Field(description="类别名称，如transport/daily_activities/weather/accommodation等")
+    tasks: List[str] = Field(description="该类别的查询任务列表")
+    summary_task: Optional[str] = Field(default=None, description="该类别的总结任务（可选），用于综合分析本类别的所有查询结果")
+
 class PlanWithIntervention(BaseModel):
     """带人工介入标识的规划"""
     overview: List[str] = Field(description="概述性规划，描述整体思路和框架，不需要执行工具")
-    actionable_tasks: List[str] = Field(description="需要执行工具的具体任务清单，每条任务明确说明需要调用什么工具、查询什么信息")
+    actionable_tasks: List[TaskCategory] = Field(description="按类别分组的可执行任务列表，每个类别包含查询任务和可选的总结任务")
     need_intervention: bool = Field(default=False, description="是否需要人工介入")
     intervention_request: Optional[InterventionRequest] = Field(default=None, description="人工介入请求")
 
@@ -173,7 +179,12 @@ class PlanWithIntervention(BaseModel):
     @property
     def plan(self) -> List[str]:
         """向后兼容的plan属性"""
-        return self.overview + self.actionable_tasks
+        all_tasks = []
+        for category in self.actionable_tasks:
+            all_tasks.extend(category.tasks)
+            if category.summary_task:
+                all_tasks.append(category.summary_task)
+        return self.overview + all_tasks
 
 class ReplanWithIntervention(BaseModel):
     """带人工介入标识的重新规划"""

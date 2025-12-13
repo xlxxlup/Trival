@@ -3,7 +3,7 @@ import uuid
 import logging
 import operator
 import json
-from typing import TypedDict, Annotated,Literal
+from typing import TypedDict, Annotated, Literal, Optional, List
 from pydantic import Field
 
 from langchain_core.prompts import PromptTemplate
@@ -14,14 +14,15 @@ from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END
 
 from utils import get_llm, get_mcp_tools
-from utils.agent_tools import retry_llm_call, execute_tool_calls
+from utils.agent_tools import retry_llm_call
 from utils.tools import tavily_search
 from config import trival_mcp_config
 
 
-from prompts import AMUSEMENT_SYSTEM_PLAN_TEMPLATE,AMUSEMENT_SYSYRM_REPLAN_TEMPLATE,AMUSEMENT_SYSTEM_JUDGE_TEMPLATE,AMUSEMENT_SUMMARY_PROMPT,AMUSEMENT_EXECUTE_SINGLE_TASK_TEMPLATE
+from prompts import AMUSEMENT_SYSTEM_PLAN_TEMPLATE,AMUSEMENT_SYSYRM_REPLAN_TEMPLATE,AMUSEMENT_SYSTEM_JUDGE_TEMPLATE,AMUSEMENT_SUMMARY_PROMPT,AMUSEMENT_COORDINATOR_TASK_DISPATCH_TEMPLATE
 from formatters import ReplanFormat,PlanFormat
 from formatters.amusement_format import AmusementFormat, PlanWithIntervention, ReplanWithIntervention, InterventionResponse
+from agent.sub_agents import create_sub_agents
 
 # 使用agent专用的logger
 logger = logging.getLogger("agent.amusement")
@@ -55,21 +56,26 @@ class AmusementState(TypedDict):
     observation_result: Annotated[dict, Field(description="Observation阶段的判断结果，包含缺失项和建议", default=None)]
 # 获取mcp工具
 async def get_mcp_trival_tools():
+    """
+    获取 MCP 工具字典
+
+    Returns:
+        dict: {server_name: [tools]} 的字典结构
+    """
     global _mcp_trival_tools
     if _mcp_trival_tools is None:
         # 只在第一次调用时执行
         logger.info("首次加载MCP工具...")
         try:
             _mcp_trival_tools = await get_mcp_tools(trival_mcp_config, timeout=30)
-            logger.info(f"MCP工具加载完成，获取到 {len(_mcp_trival_tools)} 个工具")
+            total_count = sum(len(tools) for tools in _mcp_trival_tools.values())
+            logger.info(f"MCP工具加载完成，获取到 {total_count} 个工具，来自 {len(_mcp_trival_tools)} 个服务器")
         except Exception as e:
             logger.error(f"加载MCP工具时出错: {type(e).__name__}: {str(e)}")
-            logger.warning("将使用空的MCP工具列表，仅保留本地工具")
-            _mcp_trival_tools = []
+            logger.warning("将使用空的MCP工具字典，仅保留本地工具")
+            _mcp_trival_tools = {}
 
-    total_tools = _mcp_trival_tools + [tavily_search]
-    logger.debug(f"总工具数: {len(total_tools)} (MCP: {len(_mcp_trival_tools)}, 本地: 1)")
-    return total_tools
+    return _mcp_trival_tools
 async def get_local_llm():
     global _llm
     if _llm is None:
@@ -372,7 +378,7 @@ async def plan(state:AmusementState)->AmusementState:
 
 async def excute(state :AmusementState)->AmusementState:
     logger.info("=" * 80)
-    logger.info("【EXECUTE阶段开始】逐条执行计划任务，任务内支持多轮工具调用...")
+    logger.info("【EXECUTE阶段开始 - 多Agent系统】父Agent协调子Agent按类别执行任务...")
 
     # 从state中获取plan数据，兼容新旧格式
     plan_data = state.get("plan", [])
@@ -382,178 +388,172 @@ async def excute(state :AmusementState)->AmusementState:
         # 新格式：包含overview和actionable_tasks
         overview = plan_data.get("overview", [])
         actionable_tasks = plan_data.get("actionable_tasks", [])
-        logger.info(f"新格式Plan - 概述: {len(overview)}条, 可执行任务: {len(actionable_tasks)}条")
+        logger.info(f"新格式Plan - 概述: {len(overview)}条, 任务类别数: {len(actionable_tasks)}个")
         logger.debug(f"概述内容: {overview}")
-        logger.info(f"可执行任务: {actionable_tasks}")
 
-        # 只处理actionable_tasks
-        tasks_to_execute = actionable_tasks
+        # 检查是否是分类格式
+        if actionable_tasks and isinstance(actionable_tasks[0], dict) and "category" in actionable_tasks[0]:
+            # 新的分类格式
+            logger.info("检测到新的分类任务格式")
+            task_categories = actionable_tasks
+        else:
+            # 旧的简单列表格式，转换为单一类别
+            logger.warning("检测到旧的简单列表格式，转换为单一类别处理")
+            task_categories = [{
+                "category": "general",
+                "tasks": actionable_tasks,
+                "summary_task": None
+            }]
     else:
-        # 旧格式：plan是列表
-        logger.warning("检测到旧格式Plan（列表），将全部作为可执行任务处理")
-        tasks_to_execute = plan_data
+        # 最旧格式：plan是列表，转换为单一类别
+        logger.warning("检测到最旧格式Plan（列表），将全部作为单一类别处理")
+        task_categories = [{
+            "category": "general",
+            "tasks": plan_data,
+            "summary_task": None
+        }]
 
-    if not tasks_to_execute:
-        logger.warning("⚠️  没有可执行任务，跳过Execute阶段")
+    if not task_categories:
+        logger.warning("⚠️  没有可执行任务类别，跳过Execute阶段")
         return {"messages": [AIMessage(content="没有需要执行的任务")]}
 
     # 获取已执行的任务列表，避免重复执行
     executed_tasks = state.get("executed_tasks", [])
     logger.info(f"已执行任务数: {len(executed_tasks)}")
 
-    # 过滤出未执行的任务
-    pending_tasks = [task for task in tasks_to_execute if task not in executed_tasks]
+    # 统计总任务数
+    total_tasks = sum(len(cat.get("tasks", [])) + (1 if cat.get("summary_task") else 0) for cat in task_categories)
+    logger.info(f"总任务数: {total_tasks}, 已执行: {len(executed_tasks)}")
 
-    if not pending_tasks:
-        logger.info("✓ 所有任务已执行完毕，无待执行任务")
-        return {"executed_tasks": executed_tasks}  # 保持状态不变
+    # 初始化工具和子Agent
+    logger.info("正在初始化工具和子Agent...")
+    tools_by_server = await get_mcp_trival_tools()
 
-    logger.info(f"总任务数: {len(tasks_to_execute)}, 待执行任务数: {len(pending_tasks)}")
+    total_mcp_tools = sum(len(tools) for tools in tools_by_server.values())
+    logger.info(f"已获取 {total_mcp_tools} 个MCP工具，来自 {len(tools_by_server)} 个服务器")
 
-    logger.info("正在初始化LLM和工具...")
-    trival_tools = await get_mcp_trival_tools()
+    # 创建子Agent，传入 MCP 工具字典和本地工具列表
+    logger.info("开始创建子Agent...")
+    sub_agents = await create_sub_agents(
+        tools_by_server=tools_by_server,
+        local_tools=[tavily_search]  # 本地工具列表
+    )
+    logger.info(f"✓ 子Agent创建完成，共 {len(sub_agents)} 个")
+
+    # 生成子Agent信息描述
+    sub_agents_info_list = []
+    for agent_type, agent in sub_agents.items():
+        sub_agents_info_list.append(f"- **{agent_type}** ({agent.name}): {agent.description}")
+    sub_agents_info = "\n".join(sub_agents_info_list)
+    logger.debug(f"子Agent列表:\n{sub_agents_info}")
+
+    # 初始化父Agent的LLM（用于任务分发）
     llm = await get_local_llm()
 
-    llm_with_tools = llm.bind_tools(trival_tools)
-    logger.info(f"工具绑定完成，可用工具数量: {len(trival_tools)}")
+    # 准备上下文信息
+    context = {
+        "origin": state['origin'],
+        "destination": state['destination'],
+        "date": state['date'],
+        "days": state['days'],
+        "people": state['people'],
+        "budget": state['budget'],
+        "preferences": state['preferences']
+    }
 
-    # 动态生成可用工具列表描述
-    tools_description = []
-    for idx, tool in enumerate(trival_tools, 1):
-        tool_name = tool.name if hasattr(tool, 'name') else str(tool)
-        tool_desc = tool.description if hasattr(tool, 'description') else "无描述"
-        tools_description.append(f"{idx}. **{tool_name}**: {tool_desc}")
-
-    available_tools_text = "\n".join(tools_description)
-    logger.debug(f"已生成工具描述，共{len(trival_tools)}个工具")
-
-    # 逐条执行任务
+    # 按类别逐个执行任务（父Agent分发，子Agent执行）
     all_tool_messages = []  # 收集所有工具调用的结果
     new_executed_tasks = executed_tasks.copy()
 
-    for task_idx, task in enumerate(pending_tasks, 1):
+    total_executed_count = 0  # 本轮实际执行的任务计数
+
+    for category_idx, category in enumerate(task_categories, 1):
+        category_name = category.get("category", f"category_{category_idx}")
+        tasks = category.get("tasks", [])
+        summary_task = category.get("summary_task")
+
         logger.info("=" * 80)
-        logger.info(f"【执行任务 {task_idx}/{len(pending_tasks)}】")
-        logger.info(f"任务内容: {task}")
+        logger.info(f"【类别 {category_idx}/{len(task_categories)}: {category_name}】")
+        logger.info(f"查询任务数: {len(tasks)}, 总结任务: {'有' if summary_task else '无'}")
         logger.info("=" * 80)
 
-        # 使用简化的prompt模板，只包含当前这一条任务
-        from langchain_core.prompts import PromptTemplate
+        # 该类别的工具调用结果（用于传递给summary_task）
+        category_tool_messages = []
 
-        prompt = PromptTemplate(
-            template=AMUSEMENT_EXECUTE_SINGLE_TASK_TEMPLATE,
-            input_variables=["origin", "destination", "date", "days", "people", "budget", "preferences", "current_task", "available_tools"]
-        )
+        # 执行该类别的所有查询任务
+        for task_idx, task in enumerate(tasks, 1):
+            # 检查是否已执行
+            if task in executed_tasks:
+                logger.info(f"⏭ 任务{task_idx}/{len(tasks)}已执行，跳过: {task[:50]}...")
+                continue
 
-        # 准备输入数据（只包含当前这一条任务）
-        input_data = {
-            "origin": state['origin'],
-            "destination": state['destination'],
-            "date": state['date'],
-            "days": state['days'],
-            "people": state['people'],
-            "budget": state['budget'],
-            "preferences": state['preferences'],
-            "current_task": task,  # 只传递当前任务
-            "available_tools": available_tools_text
-        }
+            logger.info("-" * 80)
+            logger.info(f"【类别{category_name} - 查询任务 {task_idx}/{len(tasks)}】")
+            logger.info(f"任务内容: {task}")
+            logger.info("-" * 80)
 
-        # 任务内多轮对话机制
-        task_messages = []  # 当前任务的消息历史
-        max_rounds = 5  # 最多5轮对话
-        task_completed = False
-
-        for round_num in range(1, max_rounds + 1):
-            logger.info(f"  【任务{task_idx} - 第{round_num}轮】")
-
-            # 构建当前轮的消息
-            if round_num == 1:
-                # 第一轮：使用完整的prompt
-                execution_context = prompt.format(**input_data)
-                current_messages = [HumanMessage(content=execution_context)]
-            else:
-                # 后续轮次：包含历史消息
-                current_messages = task_messages.copy()
-
-            logger.debug(f"  当前消息数: {len(current_messages)}")
-
-            # 调用LLM
-            logger.info(f"  🤖 调用LLM...")
-            response = await retry_llm_call(
-                llm_with_tools.ainvoke,
-                current_messages,
-                max_retries=1,
-                error_context=f"Execute阶段任务{task_idx}第{round_num}轮"
+            # 执行任务
+            tool_messages = await _execute_single_task(
+                task=task,
+                context=context,
+                sub_agents=sub_agents,
+                sub_agents_info=sub_agents_info,
+                llm=llm,
+                previous_tool_results=None,  # 查询任务不需要之前的结果
+                task_identifier=f"{category_name}-query-{task_idx}"
             )
 
-            if response is None:
-                logger.error(f"  任务{task_idx}第{round_num}轮LLM调用失败")
-                break
+            # 收集该任务的工具调用结果
+            if tool_messages:
+                category_tool_messages.extend(tool_messages)
+                all_tool_messages.extend(tool_messages)
+                logger.info(f"✓ 收集到 {len(tool_messages)} 个工具结果")
 
-            # 【新增】记录LLM response中的工具调用信息
-            if hasattr(response, 'tool_calls') and response.tool_calls:
-                logger.info(f"  📋 LLM返回的工具调用列表：")
-                for idx, tc in enumerate(response.tool_calls, 1):
-                    logger.info(f"     {idx}. 工具: {tc.get('name', 'unknown')}, ID: {tc.get('id', 'N/A')}")
-                    logger.debug(f"        参数: {tc.get('args', {})}")
-            elif "tool_calls" in response.additional_kwargs and response.additional_kwargs['tool_calls']:
-                logger.info(f"  📋 LLM返回的工具调用列表（旧格式）：")
-                for idx, tc in enumerate(response.additional_kwargs['tool_calls'], 1):
-                    logger.info(f"     {idx}. 工具: {tc.get('function', {}).get('name', 'unknown')}")
-                    logger.debug(f"        参数: {tc.get('function', {}).get('arguments', {})}")
+            # 标记任务已执行
+            new_executed_tasks.append(task)
+            total_executed_count += 1
 
-            # 将LLM响应加入消息历史
-            task_messages = current_messages + [response]
+        # 执行该类别的总结任务（如果有）
+        if summary_task:
+            # 检查是否已执行
+            if summary_task in executed_tasks:
+                logger.info(f"⏭ 总结任务已执行，跳过: {summary_task[:50]}...")
+            else:
+                logger.info("-" * 80)
+                logger.info(f"【类别{category_name} - 总结任务】")
+                logger.info(f"任务内容: {summary_task}")
+                logger.info(f"可用上下文: 该类别的 {len(category_tool_messages)} 个工具调用结果")
+                logger.info("-" * 80)
 
-            # 检查是否有工具调用
-            has_tool_calls = False
-            if hasattr(response, 'tool_calls') and response.tool_calls:
-                has_tool_calls = True
-                logger.info(f"  🔧 检测到工具调用，数量: {len(response.tool_calls)}")
-            elif "tool_calls" in response.additional_kwargs and response.additional_kwargs['tool_calls']:
-                has_tool_calls = True
-                logger.info(f"  🔧 检测到工具调用（旧格式），数量: {len(response.additional_kwargs['tool_calls'])}")
+                # 总结任务可以访问该类别所有查询任务的工具调用结果
+                tool_messages = await _execute_single_task(
+                    task=summary_task,
+                    context=context,
+                    sub_agents=sub_agents,
+                    sub_agents_info=sub_agents_info,
+                    llm=llm,
+                    previous_tool_results=category_tool_messages,  # 传递该类别的所有工具结果
+                    task_identifier=f"{category_name}-summary"
+                )
 
-            if not has_tool_calls:
-                logger.info(f"  ✓ 第{round_num}轮未检测到工具调用，任务已完成")
-                task_completed = True
-                break
+                # 收集总结任务的结果
+                if tool_messages:
+                    all_tool_messages.extend(tool_messages)
+                    logger.info(f"✓ 收集到 {len(tool_messages)} 个工具结果")
 
-            # 执行工具调用
-            logger.info(f"  🔧 开始执行工具...")
-            tool_messages = await execute_tool_calls(response, trival_tools, logger)
+                # 标记任务已执行
+                new_executed_tasks.append(summary_task)
+                total_executed_count += 1
 
-            if not tool_messages:
-                logger.warning(f"  ⚠️  工具执行失败或未返回结果")
-                break
-
-            # 将工具执行结果加入消息历史
-            task_messages.extend(tool_messages)
-            all_tool_messages.extend(tool_messages)  # 收集所有工具消息
-
-            logger.info(f"  ✓ 第{round_num}轮工具执行完成，已收集{len(tool_messages)}个工具结果")
-
-            # 【修复】检查是否达到最大轮次
-            if round_num == max_rounds:
-                logger.warning(f"  ⚠️  任务{task_idx}达到最大轮次({max_rounds})，强制结束")
-                # 【修复】最后一轮如果执行了工具，也应该标记为完成
-                task_completed = True
-                break
-
-        # 任务执行完成
-        if task_completed:
-            logger.info(f"✓ 任务{task_idx}已完成（共{round_num}轮）")
-        else:
-            logger.warning(f"⚠️  任务{task_idx}未完全完成（执行了{round_num}轮）")
-
-        # 标记任务已执行
-        new_executed_tasks.append(task)
+        logger.info(f"【类别 {category_name} 完成】收集到该类别工具消息数: {len(category_tool_messages)}")
 
     logger.info("=" * 80)
-    logger.info(f"【EXECUTE阶段结束】")
-    logger.info(f"  - 共执行任务数: {len(pending_tasks)}")
-    logger.info(f"  - 累计已执行任务数: {len(new_executed_tasks)}/{len(tasks_to_execute)}")
+    logger.info(f"【EXECUTE阶段结束 - 多Agent系统】")
+    logger.info(f"  - 共执行任务类别数: {len(task_categories)}")
+    logger.info(f"  - 本轮执行任务数: {total_executed_count}")
+    logger.info(f"  - 累计已执行任务数: {len(new_executed_tasks)}")
     logger.info(f"  - 收集到工具消息数: {len(all_tool_messages)}")
+    logger.info(f"  - 参与的子Agent数: {len(sub_agents)}")
     logger.info("=" * 80)
 
     # 返回所有工具消息和更新的executed_tasks
@@ -561,6 +561,138 @@ async def excute(state :AmusementState)->AmusementState:
         "messages": all_tool_messages,  # 只返回工具消息，供replan使用
         "executed_tasks": new_executed_tasks
     }
+
+async def _execute_single_task(
+    task: str,
+    context: dict,
+    sub_agents: dict,
+    sub_agents_info: str,
+    llm,
+    previous_tool_results: Optional[List[ToolMessage]],
+    task_identifier: str
+) -> List[ToolMessage]:
+    """
+    执行单个任务的辅助函数
+
+    Args:
+        task: 任务描述
+        context: 上下文信息
+        sub_agents: 子Agent字典
+        sub_agents_info: 子Agent描述信息
+        llm: LLM实例
+        previous_tool_results: 之前的工具调用结果（用于总结任务）
+        task_identifier: 任务标识符（用于日志）
+
+    Returns:
+        该任务执行产生的ToolMessage列表
+    """
+    logger.info(f"【父Agent】正在分析任务，决定分配给哪个子Agent...")
+
+    dispatch_prompt = AMUSEMENT_COORDINATOR_TASK_DISPATCH_TEMPLATE.format(
+        task=task,
+        origin=context['origin'],
+        destination=context['destination'],
+        date=context['date'],
+        days=context['days'],
+        people=context['people'],
+        budget=context['budget'],
+        preferences=context['preferences'],
+        sub_agents_info=sub_agents_info
+    )
+
+    logger.debug(f"任务分发Prompt:\n{dispatch_prompt}")
+
+    # 调用LLM进行任务分发决策
+    dispatch_response = await retry_llm_call(
+        llm.ainvoke,
+        [HumanMessage(content=dispatch_prompt)],
+        max_retries=1,
+        error_context=f"父Agent任务分发-{task_identifier}"
+    )
+
+    if dispatch_response is None:
+        logger.error(f"【父Agent】任务分发失败，跳过任务: {task}")
+        return []
+
+    # 解析分发决策
+    try:
+        dispatch_text = dispatch_response.content.strip()
+        logger.debug(f"【父Agent】分发决策原始响应: {dispatch_text}")
+
+        # 尝试提取JSON
+        if '```json' in dispatch_text:
+            json_start = dispatch_text.find('```json') + 7
+            json_end = dispatch_text.find('```', json_start)
+            json_text = dispatch_text[json_start:json_end].strip()
+        elif '```' in dispatch_text:
+            json_start = dispatch_text.find('```') + 3
+            json_end = dispatch_text.find('```', json_start)
+            json_text = dispatch_text[json_start:json_end].strip()
+        elif '{' in dispatch_text:
+            json_start = dispatch_text.find('{')
+            json_end = dispatch_text.rfind('}') + 1
+            json_text = dispatch_text[json_start:json_end]
+        else:
+            json_text = dispatch_text
+
+        dispatch_decision = json.loads(json_text)
+        selected_agent_type = dispatch_decision.get('selected_agent', 'search')
+        reason = dispatch_decision.get('reason', '未提供原因')
+
+        logger.info(f"【父Agent】决定将任务分配给: {selected_agent_type}")
+        logger.info(f"【父Agent】分配原因: {reason}")
+
+    except Exception as e:
+        logger.error(f"【父Agent】解析分发决策失败: {e}")
+        logger.warning(f"【父Agent】使用默认策略：根据关键词分配")
+
+        # 降级策略：基于关键词简单判断
+        task_lower = task.lower()
+        if any(keyword in task_lower for keyword in ['火车', '高铁', '动车', '机票', '航班', '车票', '交通']):
+            selected_agent_type = 'transport'
+        elif any(keyword in task_lower for keyword in ['天气', '气温', '降水', '降雨', '下雨', '晴天', '阴天', '气候', '温度']):
+            selected_agent_type = 'weather'
+        elif any(keyword in task_lower for keyword in ['酒店', '住宿', '宾馆', '旅馆', '民宿', '客栈', '入住']):
+            selected_agent_type = 'hotel'
+        elif any(keyword in task_lower for keyword in ['景点', 'poi', '地图', '路线', '餐厅', '酒吧', '周边']):
+            selected_agent_type = 'map'
+        elif any(keyword in task_lower for keyword in ['文件', '保存', '读取', '写入']):
+            selected_agent_type = 'file'
+        else:
+            selected_agent_type = 'search'
+
+        logger.info(f"【父Agent】降级策略选择: {selected_agent_type}")
+
+    # 获取对应的子Agent并执行任务
+    if selected_agent_type not in sub_agents:
+        logger.warning(f"【父Agent】未找到子Agent类型 {selected_agent_type}，使用search作为默认")
+        selected_agent_type = 'search' if 'search' in sub_agents else list(sub_agents.keys())[0]
+
+    selected_sub_agent = sub_agents[selected_agent_type]
+    logger.info(f"【子Agent: {selected_sub_agent.name}】开始执行任务...")
+
+    # 调用子Agent执行任务
+    try:
+        result = await selected_sub_agent.execute_task(
+            task=task,
+            context=context,
+            previous_tool_results=previous_tool_results,  # 传递之前的工具调用结果（仅总结任务有值）
+            max_rounds=None  # 使用子Agent配置的默认max_rounds
+        )
+
+        if result['success']:
+            logger.info(f"【子Agent: {selected_sub_agent.name}】✓ 任务执行成功")
+            logger.info(f"【子Agent: {selected_sub_agent.name}】收集到 {len(result['tool_messages'])} 个工具结果")
+            logger.debug(f"【子Agent: {selected_sub_agent.name}】总结: {result['summary']}")
+            return result['tool_messages']
+        else:
+            logger.warning(f"【子Agent: {selected_sub_agent.name}】⚠️  任务执行未成功")
+            return []
+
+    except Exception as e:
+        logger.error(f"【子Agent: {selected_sub_agent.name}】执行任务时出错: {e}")
+        logger.exception(e)
+        return []
 
 async def replan(state:AmusementState)->AmusementState:
     logger.info("=" * 80)
