@@ -93,3 +93,7 @@ additional_kwargs 中不再包含 tool_calls
 24、我需要把每个大任务规划阶段个子任务进行的max_rounds数，当作一个超参数从代码提取出来，可以对每个sub_agent的max_rounds进行单独设置，将参数放到一个文件里，可以进行配置，前端就不需要了，在后端能控制就好了
 
 25、任务需要分类，不然太乱了
+
+26、下次测试两个新加的agent，目前酒店没有价格，天气获取不到五天的
+
+27、final_response_content没返回

@@ -177,7 +177,7 @@ async def compress_messages(messages: list[BaseMessage], max_messages: int = 15)
         return tool_messages + other_messages[-max_messages:]
 async def plan(state:AmusementState)->AmusementState:
     logger.info("=" * 80)
-    logger.info("【PLAN阶段开始】娱乐智能体开始规划...")
+    logger.info("【PLAN阶段开始】旅游智能体开始规划...")
     logger.info(f"输入参数: 出发地={state['origin']}, 目的地={state['destination']}, 日期={state['date']}, 天数={state['days']}, 人数={state['people']}, 预算={state['budget']}")
     logger.debug(f"用户偏好: {state['preferences']}")
     logger.info(f"当前人工介入次数: {state.get('intervention_count', 0)}")
@@ -696,7 +696,7 @@ async def _execute_single_task(
 
 async def replan(state:AmusementState)->AmusementState:
     logger.info("=" * 80)
-    logger.info("【REPLAN阶段开始】娱乐智能体重新规划并生成旅游攻略...")
+    logger.info("【REPLAN阶段开始】旅游智能体重新规划并生成旅游攻略...")
     logger.info(f"输入参数: 目的地={state['destination']}, 天数={state['days']}, 预算={state['budget']}, 人数={state['people']}")
 
     # 处理plan格式（新旧兼容）

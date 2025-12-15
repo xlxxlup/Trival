@@ -9,24 +9,25 @@ trival_mcp_config = {
       "transport": "streamable_http",
       "url": "https://mcp.api-inference.modelscope.net/17d96fdf3db846/mcp"
     },
-    # 机票查询 - 提供详细的航班信息
+    # 机票查询 - 提供详细的航班信息（本地部署，需先启动 flight-ticket-mcp-server）
     "flight-ticket-mcp": {
         "transport": "streamable_http",
-        "url": "https://mcp.api-inference.modelscope.net/88db201fc7b448/mcp"
+        "url": "http://127.0.0.1:8080/mcp"
     },
     # 浏览器搜索
-    "fetch": {
-      "transport": "streamable_http",
-      "url": "https://mcp.api-inference.modelscope.net/5ad4894744a64b/mcp"
+    "bing-cn-mcp-server": {
+      "type": "sse",
+      "url": "https://mcp.api-inference.modelscope.net/8f8992a2df3d44/sse"
     },
     # 天气查询 MCP - 专门的天气服务
-    "MCP_WEATHER_MCP_Agent_Challenge": {
-      "transport": "streamable_http",
-      "url": "https://mcp.api-inference.modelscope.net/de3453c8463949/mcp"
+    "mcp_tool": {
+      "transport": "sse",
+      "url": "https://mcp.api-inference.modelscope.net/662f8555dfe746/sse"
     },
     # 酒店查询 MCP - 专门的酒店服务（本地部署，使用npx启动） npx jinko-mcp-dev@latest
     "jinkocx-jinko-mcp": {
-        "command": "npx",
+        "transport": "stdio",
+        "command": "npx.cmd",
         "args": ["jinko-mcp-dev@latest"]
     },
 }
@@ -38,8 +39,8 @@ mcp_to_agent_mapping = {
     "12306-mcp": "transport",      # 12306的所有工具 → 交通助手
     "flight-ticket-mcp": "transport",  # 机票的所有工具 → 交通助手
     "amap-maps": "map",            # 高德地图的所有工具 → 地图助手
-    "fetch": ["search", "transport"],  # fetch工具同时给搜索助手和交通助手（作为fallback）
-    "MCP_WEATHER_MCP_Agent_Challenge": "weather",
+    "bing-cn-mcp-server": ["search", "transport"],  # bing-cn-mcp-server 工具同时给搜索助手和交通助手（作为fallback）
+    "mcp_tool": "weather",
     "jinkocx-jinko-mcp": "hotel"
     # 未来可以添加更多映射：
     # "tavily-search-mcp": "search",
@@ -57,6 +58,6 @@ train_mcp_config = {
 flight_mcp_config = {
     "flight-ticket-mcp": {
         "transport": "streamable_http",
-        "url": "https://mcp.api-inference.modelscope.net/88db201fc7b448/mcp"
+        "url": "http://127.0.0.1:8080/mcp"
     }
 }
