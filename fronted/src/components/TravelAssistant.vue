@@ -3,12 +3,12 @@ import { reactive, ref } from 'vue'
 import { generateTravelPlan, resumeTravelPlan } from '../services/api'
 
 const form = reactive({
-	origin:'',
-	destination: '',
+	origin:'沈阳',
+	destination: '长沙',
 	date: '',
-	days: 3,
-	budget: '',
-	preferences: '',
+	days: 4,
+	budget: 5000,
+	preferences: '我要坐飞机往返，在规划时，不需要考虑任何价格问题',
 	people: 1
 })
 

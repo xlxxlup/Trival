@@ -6,13 +6,13 @@
 # 子Agent的最大轮次配置
 SUB_AGENT_MAX_ROUNDS = {
     # 交通助手：查询火车票、机票等
-    "transport": 3,
+    "transport": 2,
 
     # 地图助手：查询景点、路线、周边信息
     "map": 2,
 
     # 搜索助手：互联网搜索
-    "search": 3,
+    "search": 2,
 
     # 文件助手：文件读写操作
     "file": 2,
@@ -21,7 +21,7 @@ SUB_AGENT_MAX_ROUNDS = {
     "weather": 2,
 
     # 酒店助手：查询酒店信息
-    "hotel": 3,
+    "hotel": 2,
 }
 
 # 默认最大轮次（当某个agent类型未在上面配置时使用）

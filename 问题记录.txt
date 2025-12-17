@@ -97,3 +97,5 @@ additional_kwargs 中不再包含 tool_calls
 26、下次测试两个新加的agent，目前酒店没有价格，天气获取不到五天的
 
 27、final_response_content没返回
+
+28、搜索mcp工具有点问题
