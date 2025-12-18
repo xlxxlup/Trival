@@ -14,3 +14,4 @@ backend/session_store.json
 langchain/*
 langgraph/*
 修复说明_20251125.md
+backend/data/tool_executions/*

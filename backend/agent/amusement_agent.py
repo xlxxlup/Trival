@@ -13,20 +13,16 @@ from langgraph.types import Command
 from langgraph.graph.message import add_messages
 from langgraph.graph import StateGraph, START, END
 
-from utils import get_llm, get_mcp_tools
+from utils import get_llm
 from utils.agent_tools import retry_llm_call
-from utils.tools import zhipu_search
-from config import trival_mcp_config
-
+from utils.mcp_manager import get_mcp_manager
 
 from prompts import AMUSEMENT_SYSTEM_PLAN_TEMPLATE,AMUSEMENT_SYSYRM_REPLAN_TEMPLATE,AMUSEMENT_SYSTEM_JUDGE_TEMPLATE,AMUSEMENT_SUMMARY_PROMPT,AMUSEMENT_COORDINATOR_TASK_DISPATCH_TEMPLATE
 from formatters import ReplanFormat,PlanFormat
 from formatters.amusement_format import AmusementFormat, PlanWithIntervention, ReplanWithIntervention, InterventionResponse
-from agent.sub_agents import create_sub_agents
 
 # 使用agent专用的logger
 logger = logging.getLogger("agent.amusement")
-_mcp_trival_tools = None
 _llm = None
 
 class AmusementState(TypedDict):
@@ -54,28 +50,7 @@ class AmusementState(TypedDict):
     current_task_index: Annotated[int, Field(description="当前执行到第几条任务", default=0)]
     # Observation结果
     observation_result: Annotated[dict, Field(description="Observation阶段的判断结果，包含缺失项和建议", default=None)]
-# 获取mcp工具
-async def get_mcp_trival_tools():
-    """
-    获取 MCP 工具字典
 
-    Returns:
-        dict: {server_name: [tools]} 的字典结构
-    """
-    global _mcp_trival_tools
-    if _mcp_trival_tools is None:
-        # 只在第一次调用时执行
-        logger.info("首次加载MCP工具...")
-        try:
-            _mcp_trival_tools = await get_mcp_tools(trival_mcp_config, timeout=30)
-            total_count = sum(len(tools) for tools in _mcp_trival_tools.values())
-            logger.info(f"MCP工具加载完成，获取到 {total_count} 个工具，来自 {len(_mcp_trival_tools)} 个服务器")
-        except Exception as e:
-            logger.error(f"加载MCP工具时出错: {type(e).__name__}: {str(e)}")
-            logger.warning("将使用空的MCP工具字典，仅保留本地工具")
-            _mcp_trival_tools = {}
-
-    return _mcp_trival_tools
 async def get_local_llm():
     global _llm
     if _llm is None:
@@ -425,20 +400,20 @@ async def excute(state :AmusementState)->AmusementState:
     total_tasks = sum(len(cat.get("tasks", [])) + (1 if cat.get("summary_task") else 0) for cat in task_categories)
     logger.info(f"总任务数: {total_tasks}, 已执行: {len(executed_tasks)}")
 
-    # 初始化工具和子Agent
-    logger.info("正在初始化工具和子Agent...")
-    tools_by_server = await get_mcp_trival_tools()
+    # 从全局MCP管理器获取工具和子Agent
+    logger.info("正在从全局MCP管理器获取工具和子Agent...")
+    mcp_manager = get_mcp_manager()
+
+    if not mcp_manager.is_initialized():
+        logger.error("MCP管理器未初始化，无法执行任务")
+        return {"messages": [AIMessage(content="系统错误：MCP管理器未初始化")]}
+
+    tools_by_server = mcp_manager.get_tools_by_server()
+    sub_agents = mcp_manager.get_sub_agents()
 
     total_mcp_tools = sum(len(tools) for tools in tools_by_server.values())
     logger.info(f"已获取 {total_mcp_tools} 个MCP工具，来自 {len(tools_by_server)} 个服务器")
-
-    # 创建子Agent，传入 MCP 工具字典和本地工具列表
-    logger.info("开始创建子Agent...")
-    sub_agents = await create_sub_agents(
-        tools_by_server=tools_by_server,
-        local_tools=[zhipu_search]  # 本地工具列表
-    )
-    logger.info(f"✓ 子Agent创建完成，共 {len(sub_agents)} 个")
+    logger.info(f"已获取 {len(sub_agents)} 个子Agent")
 
     # 生成子Agent信息描述
     sub_agents_info_list = []
@@ -502,7 +477,8 @@ async def excute(state :AmusementState)->AmusementState:
                 sub_agents_info=sub_agents_info,
                 llm=llm,
                 previous_tool_results=None,  # 查询任务不需要之前的结果
-                task_identifier=f"{category_name}-query-{task_idx}"
+                task_identifier=f"{category_name}-query-{task_idx}",
+                category=category_name  # 传递category用于存储
             )
 
             # 收集该任务的工具调用结果
@@ -528,20 +504,22 @@ async def excute(state :AmusementState)->AmusementState:
                 logger.info("-" * 80)
 
                 # 总结任务可以访问该类别所有查询任务的工具调用结果
-                tool_messages = await _execute_single_task(
+                summary_result = await _execute_single_task(
                     task=summary_task,
                     context=context,
                     sub_agents=sub_agents,
                     sub_agents_info=sub_agents_info,
                     llm=llm,
                     previous_tool_results=category_tool_messages,  # 传递该类别的所有工具结果
-                    task_identifier=f"{category_name}-summary"
+                    task_identifier=f"{category_name}-summary",
+                    category=category_name  # 传递category用于存储
                 )
 
                 # 收集总结任务的结果
-                if tool_messages:
-                    all_tool_messages.extend(tool_messages)
-                    logger.info(f"✓ 收集到 {len(tool_messages)} 个工具结果")
+                # 总结任务不会产生tool_messages（因为不调用工具），而是返回一个包含文本响应的AIMessage
+                if summary_result:
+                    all_tool_messages.extend(summary_result)
+                    logger.info(f"✓ 收集到总结任务结果: {len(summary_result)} 个消息")
 
                 # 标记任务已执行
                 new_executed_tasks.append(summary_task)
@@ -571,8 +549,9 @@ async def _execute_single_task(
     sub_agents_info: str,
     llm,
     previous_tool_results: Optional[List[ToolMessage]],
-    task_identifier: str
-) -> List[ToolMessage]:
+    task_identifier: str,
+    category: str
+) -> List[BaseMessage]:
     """
     执行单个任务的辅助函数
 
@@ -584,9 +563,10 @@ async def _execute_single_task(
         llm: LLM实例
         previous_tool_results: 之前的工具调用结果（用于总结任务）
         task_identifier: 任务标识符（用于日志）
+        category: 任务类别（用于存储工具执行数据）
 
     Returns:
-        该任务执行产生的ToolMessage列表
+        该任务执行产生的消息列表（对于查询任务是ToolMessage，对于总结任务是AIMessage）
     """
     logger.info(f"【父Agent】正在分析任务，决定分配给哪个子Agent...")
 
@@ -679,14 +659,31 @@ async def _execute_single_task(
             task=task,
             context=context,
             previous_tool_results=previous_tool_results,  # 传递之前的工具调用结果（仅总结任务有值）
-            max_rounds=None  # 使用子Agent配置的默认max_rounds
+            max_rounds=None,  # 使用子Agent配置的默认max_rounds
+            category=category  # 传递category用于存储工具执行数据
         )
 
         if result['success']:
             logger.info(f"【子Agent: {selected_sub_agent.name}】✓ 任务执行成功")
-            logger.info(f"【子Agent: {selected_sub_agent.name}】收集到 {len(result['tool_messages'])} 个工具结果")
-            logger.debug(f"【子Agent: {selected_sub_agent.name}】总结: {result['summary']}")
-            return result['tool_messages']
+
+            # 判断是查询任务还是总结任务
+            if result.get('is_summary_task', False):
+                # 总结任务：返回包含总结内容的AIMessage
+                logger.info(f"【子Agent: {selected_sub_agent.name}】总结任务完成，返回AIMessage")
+                summary_content = result.get('final_response', '')
+                if summary_content:
+                    logger.info(f"【子Agent: {selected_sub_agent.name}】总结内容长度: {len(summary_content)}")
+                    logger.debug(f"【子Agent: {selected_sub_agent.name}】总结内容: {summary_content[:500]}...")
+                    # 创建AIMessage包含总结结果
+                    return [AIMessage(content=f"【{task[:30]}...】的总结结果：\n{summary_content}")]
+                else:
+                    logger.warning(f"【子Agent: {selected_sub_agent.name}】总结任务未生成内容")
+                    return []
+            else:
+                # 查询任务：返回工具调用结果
+                logger.info(f"【子Agent: {selected_sub_agent.name}】收集到 {len(result['tool_messages'])} 个工具结果")
+                logger.debug(f"【子Agent: {selected_sub_agent.name}】任务总结: {result['summary']}")
+                return result['tool_messages']
         else:
             logger.warning(f"【子Agent: {selected_sub_agent.name}】⚠️  任务执行未成功")
             return []

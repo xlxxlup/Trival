@@ -2,16 +2,49 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from contextlib import asynccontextmanager
 import uvicorn
 import os
+import logging
 
 from api.trival import trival_route
 from logging_config import setup_logging
+from utils.mcp_manager import initialize_mcp_manager
 
 # 初始化日志系统
 setup_logging()
 
-app = FastAPI(title="旅游助手")
+logger = logging.getLogger(__name__)
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """
+    应用生命周期管理器
+    """
+    # 启动时执行
+    logger.info("=" * 80)
+    logger.info("【应用启动】开始初始化...")
+    logger.info("=" * 80)
+
+    # 初始化MCP管理器（连接MCP服务器并创建子Agent）
+    logger.info("正在初始化MCP工具和子Agent...")
+    success = await initialize_mcp_manager(timeout=30)
+
+    if success:
+        logger.info("✅ MCP初始化成功")
+    else:
+        logger.warning("⚠️ MCP初始化失败，系统将在无MCP工具的情况下运行")
+
+    logger.info("=" * 80)
+    logger.info("【应用启动】初始化完成，服务已就绪")
+    logger.info("=" * 80)
+
+    yield  # 应用运行期间
+
+    # 关闭时执行（如果需要清理资源）
+    logger.info("应用关闭中...")
+
+app = FastAPI(title="旅游助手", lifespan=lifespan)
 
 # 配置 CORS
 app.add_middleware(

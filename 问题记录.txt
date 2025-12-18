@@ -106,4 +106,8 @@ additional_kwargs 中不再包含 tool_calls
 33、给所有智能体加上搜索工具，但是只有在专有mcp查不到信息、或者失效时，才能用
 34、summary = self._generate_summary(all_tool_messages) 到底要不要
 35、for round_num in range(1, max_rounds + 1): 之后需要判断任务是否完成，只给出01，没完成就继续执行
-36
+36、如果两次之后还是失败，再去搜一次
+37、代码有点问题，对于每个summary_task，总结之后，信息似乎并没有被利用起来。因为_execute_single_task返回的是result['tool_messages']，总结任务summary_task是不调用工具的，那summary_task不就没被利用吗？
+summary_task是非常重要的，帮我优化代码，summary_task也需要利用
+38、1、在判断任务是否完成时，无论是在execute阶段的_check_task_completion，还是在replan以及observation阶段。只要任务的基本信息得到就算完成，例如机票的时间、航班号，价格有了就行，至于改签、行李额度啥的，
+有更好，没有也无所谓。例如酒店，只要有了酒店名称，酒店位置等基本信息就行，至于延迟退房这种附加信息，有更好，没有也不所谓。所以在replan阶段或者是observation阶段,规划补充任务时也需要注意这一点。

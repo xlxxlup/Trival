@@ -9,6 +9,7 @@ from langchain_core.prompts import PromptTemplate
 
 from utils import get_llm
 from utils.agent_tools import retry_llm_call, execute_tool_calls
+from utils.tool_data_storage import get_tool_storage
 from config import get_max_rounds
 
 logger = logging.getLogger("agent.sub_agents")
@@ -43,7 +44,8 @@ class BaseSubAgent:
         task: str,
         context: Dict[str, Any],
         previous_tool_results: Optional[List[ToolMessage]] = None,
-        max_rounds: Optional[int] = None
+        max_rounds: Optional[int] = None,
+        category: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         执行任务
@@ -53,6 +55,7 @@ class BaseSubAgent:
             context: 上下文信息（包括 origin, destination, date 等）
             previous_tool_results: 之前任务执行的工具调用结果（用于提供上下文）
             max_rounds: 最大轮次（如果不指定，使用该agent类型的默认配置）
+            category: 任务类别（用于存储工具执行数据，如transport、hotel、weather等）
 
         Returns:
             {
@@ -64,6 +67,14 @@ class BaseSubAgent:
             }
         """
         await self.initialize()
+
+        # 获取工具数据存储实例
+        storage = get_tool_storage()
+
+        # 如果没有指定category，使用agent_type作为默认值
+        if category is None:
+            category = self.agent_type
+            logger.debug(f"【子Agent: {self.name}】未指定category，使用agent_type: {category}")
 
         # 如果没有指定max_rounds，使用该agent类型的默认配置
         if max_rounds is None:
@@ -164,6 +175,33 @@ class BaseSubAgent:
             task_messages.extend(tool_messages)
             all_tool_messages.extend(tool_messages)
 
+            # 保存工具执行结果到JSON文件
+            for tool_msg in tool_messages:
+                try:
+                    tool_name = tool_msg.name if hasattr(tool_msg, 'name') else 'unknown'
+                    # 尝试从tool_call_id解析工具输入
+                    tool_input = {}
+                    if hasattr(response, 'tool_calls'):
+                        for tool_call in response.tool_calls:
+                            if tool_call.get('id') == tool_msg.tool_call_id:
+                                tool_input = tool_call.get('args', {})
+                                break
+
+                    storage.save_tool_execution(
+                        category=category,
+                        tool_name=tool_name,
+                        tool_input=tool_input,
+                        tool_output=tool_msg.content,
+                        context=context,
+                        metadata={
+                            "task": task,
+                            "agent_name": self.name,
+                            "round": round_num
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"保存工具执行结果失败: {e}")
+
             logger.info(f"  [{self.name}] 第{round_num}轮完成，收集到{len(tool_messages)}个工具结果")
 
             if round_num == max_rounds:
@@ -228,10 +266,68 @@ class BaseSubAgent:
                     task_messages.extend(tool_messages)
                     all_tool_messages.extend(tool_messages)
 
+                    # 保存工具执行结果到JSON文件
+                    for tool_msg in tool_messages:
+                        try:
+                            tool_name = tool_msg.name if hasattr(tool_msg, 'name') else 'unknown'
+                            # 尝试从tool_call_id解析工具输入
+                            tool_input = {}
+                            if hasattr(response, 'tool_calls'):
+                                for tool_call in response.tool_calls:
+                                    if tool_call.get('id') == tool_msg.tool_call_id:
+                                        tool_input = tool_call.get('args', {})
+                                        break
+
+                            storage.save_tool_execution(
+                                category=category,
+                                tool_name=tool_name,
+                                tool_input=tool_input,
+                                tool_output=tool_msg.content,
+                                context=context,
+                                metadata={
+                                    "task": task,
+                                    "agent_name": self.name,
+                                    "round": f"extra_{extra_round}"
+                                }
+                            )
+                        except Exception as e:
+                            logger.error(f"保存工具执行结果失败: {e}")
+
                     logger.info(f"  [{self.name}] 额外第{extra_round}轮完成，收集到{len(tool_messages)}个工具结果")
 
                     if extra_round == extra_rounds:
                         logger.warning(f"  [{self.name}] 达到额外轮次上限")
+
+            # 两次额外轮次后，再次检查任务完成度
+            final_completion_status = await self._check_task_completion(task, context, all_tool_messages)
+
+            if final_completion_status == 0:
+                logger.warning(f"  [{self.name}] ⚠ 两次额外轮次后任务仍未完成，尝试使用zhipu_search补全信息")
+
+                # 构建搜索query
+                search_query = await self._build_fallback_search_query(task, context, all_tool_messages)
+                logger.info(f"  [{self.name}] 构建搜索query: {search_query}")
+
+                # 直接调用zhipu_search函数
+                try:
+                    from utils.tools import zhipu_search
+
+                    # 调用zhipu_search（同步函数）
+                    search_result = zhipu_search.invoke({"query": search_query})
+
+                    # 创建ToolMessage
+                    from langchain_core.messages import ToolMessage as LangChainToolMessage
+                    search_tool_message = LangChainToolMessage(
+                        content=str(search_result),
+                        tool_call_id=f"fallback_search_{len(all_tool_messages)}",
+                        name="zhipu_search"
+                    )
+
+                    all_tool_messages.append(search_tool_message)
+                    logger.info(f"  [{self.name}] ✓ zhipu_search补全搜索完成，结果长度: {len(str(search_result))}")
+
+                except Exception as e:
+                    logger.error(f"  [{self.name}] ✗ zhipu_search补全搜索失败: {str(e)}")
 
         # 生成总结
         summary = self._generate_summary(all_tool_messages)
@@ -380,13 +476,24 @@ class BaseSubAgent:
 请仔细分析任务要求和已有的工具调用结果，判断任务是否完成。
 
 **判断标准**:
-1. 任务要求的所有必要信息是否都已经查询到
+1. **只要获得基本信息就算完成**，不强求附加信息：
+   - 机票：时间、航班号、价格有了就行(也必须有这三个信息)，改签、行李额度等是附加信息（有更好，没有也算完成）
+   - 酒店：酒店名称、位置等基本信息有了就行，延迟退房等是附加信息（有更好，没有也算完成）
+   - 火车票：车次、时间、价格有了就行(也必须有这三个信息)，座位类型、余票数等是附加信息（有更好，没有也算完成）
+   - 天气：温度、天气状况有了就行，湿度、风力等是附加信息（有更好，没有也算完成）
+   - 景点：景点名称、位置有了就行，营业时间、门票价格等是附加信息（有更好，没有也算完成）
 2. 工具调用返回的结果是否有效（不是错误或空结果）
-3. 是否需要更多信息才能完成任务
+3. 基本信息是否已经查询到（不要求完美和全面，有基础数据即可）
+
+**重要原则**：
+- 机票或者火车高铁票一定需要价格信息，没有则不能完成
+- 不要追求完美，基本信息齐全即可判定完成
+- 附加信息（如改签政策、行李额度、延迟退房等）是锦上添花，不影响任务完成判断
+- 只要任务要求的核心数据已获取，即使不够详细，也应判定为完成
 
 **重要**：只返回一个数字：
-- 返回 0：任务未完成，还需要继续查询或操作
-- 返回 1：任务已完成，所有必要信息已获取
+- 返回 0：任务未完成，基本信息还没有获取到
+- 返回 1：任务已完成，基本信息已获取（即使附加信息缺失也算完成）
 
 请只回复0或1，不要有任何其他内容。"""
 
@@ -420,6 +527,64 @@ class BaseSubAgent:
         except Exception as e:
             logger.error(f"  [{self.name}] 任务完成度检查异常: {str(e)}，默认为已完成")
             return 1
+
+    async def _build_fallback_search_query(
+        self,
+        task: str,
+        context: Dict[str, Any],
+        all_tool_messages: List[ToolMessage]
+    ) -> str:
+        """
+        构建补全搜索的query
+
+        基于任务描述、上下文和已有的工具调用结果，构建一个合适的搜索query
+        """
+        # 提取上下文关键信息
+        origin = context.get('origin', '')
+        destination = context.get('destination', '')
+        date = context.get('date', '')
+        budget = context.get('budget', '')
+
+        # 分析任务类型，构建针对性的搜索query
+        task_lower = task.lower()
+
+        # 构建基础query部分
+        query_parts = []
+
+        # 添加地点信息
+        if destination:
+            query_parts.append(destination)
+
+        # 根据任务类型添加特定关键词
+        if '机票' in task or '航班' in task or 'flight' in task_lower:
+            query_parts.extend([origin, '机票', '价格', '航班', date if date else '2025'])
+        elif '火车' in task or '高铁' in task or 'train' in task_lower:
+            query_parts.extend([origin, '火车票', '高铁', '车次', '价格', date if date else '2025'])
+        elif '酒店' in task or 'hotel' in task_lower or '住宿' in task:
+            query_parts.extend(['酒店', '住宿', '价格', '推荐', date if date else '2025'])
+        elif '天气' in task or 'weather' in task_lower:
+            query_parts.extend(['天气', '温度', '预报', date if date else '2025'])
+        elif '景点' in task or '旅游' in task or '游览' in task:
+            query_parts.extend(['旅游景点', '门票', '开放时间', '推荐', '2025'])
+        elif '美食' in task or '餐厅' in task or '吃' in task:
+            query_parts.extend(['美食', '餐厅', '推荐', '特色', '2025'])
+        else:
+            # 默认通用搜索
+            query_parts.extend(['信息', '推荐', '攻略', '2025'])
+
+        # 添加预算信息
+        if budget:
+            query_parts.append(f'预算{budget}')
+
+        # 组合成搜索query
+        search_query = ' '.join([part for part in query_parts if part])
+
+        # 确保query不为空
+        if not search_query:
+            search_query = f"{destination} {task} 2025"
+
+        logger.debug(f"  [{self.name}] 构建的补全搜索query: {search_query}")
+        return search_query
 
     def _generate_summary(self, tool_messages: List[ToolMessage]) -> str:
         """生成工具调用总结"""

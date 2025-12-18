@@ -10,14 +10,14 @@ trival_mcp_config = {
       "url": "https://mcp.api-inference.modelscope.net/17d96fdf3db846/mcp"
     },
     # 机票查询 - 提供详细的航班信息（本地部署，需先启动 flight-ticket-mcp-server）
-    # "flight-ticket-mcp": {
-    #     "transport": "sse",
-    #     "url": "http://127.0.0.1:8080/sse"
-    # },
-    "variflight-mcp": {
-      "transport": "sse",
-      "url": "https://mcp.api-inference.modelscope.net/520f938ab0a546/sse"
+    "flight-ticket-mcp": {
+        "transport": "sse",
+        "url": "http://127.0.0.1:8080/sse"
     },
+    # "variflight-mcp": {
+    #   "transport": "sse",
+    #   "url": "https://mcp.api-inference.modelscope.net/520f938ab0a546/sse"
+    # },
     # 天气查询 MCP - 专门的天气服务
     "mcp_tool": {
       "transport": "sse",
@@ -49,7 +49,7 @@ trival_mcp_config = {
 # 而不是根据工具名称硬编码绑定
 mcp_to_agent_mapping = {
     "12306-mcp": "transport",      # 12306的所有工具 → 交通助手
-    "variflight-mcp": "transport",  # 机票的所有工具 → 交通助手
+    "flight-ticket-mcp": "transport",  # 机票的所有工具 → 交通助手
     # "fetch": ["search", "transport"],  # mcp-server-fetch 工具（已禁用，使用 zhipu_search 替代）
     "mcp_tool": "weather",
     "amap-maps": ["hotel","map"] # 高德地图的所有工具 → 酒店助手、地图助手
