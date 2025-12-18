@@ -15,7 +15,7 @@ from langgraph.graph import StateGraph, START, END
 
 from utils import get_llm, get_mcp_tools
 from utils.agent_tools import retry_llm_call
-from utils.tools import tavily_search
+from utils.tools import zhipu_search
 from config import trival_mcp_config
 
 
@@ -436,7 +436,7 @@ async def excute(state :AmusementState)->AmusementState:
     logger.info("开始创建子Agent...")
     sub_agents = await create_sub_agents(
         tools_by_server=tools_by_server,
-        # local_tools=[tavily_search]  # 本地工具列表
+        local_tools=[zhipu_search]  # 本地工具列表
     )
     logger.info(f"✓ 子Agent创建完成，共 {len(sub_agents)} 个")
 
@@ -468,7 +468,7 @@ async def excute(state :AmusementState)->AmusementState:
     total_executed_count = 0  # 本轮实际执行的任务计数
 
     for category_idx, category in enumerate(task_categories, 1):
-        # if category.get("category") != "transport":
+        # if category.get("category") != "weather":
         #     continue
         category_name = category.get("category", f"category_{category_idx}")
         tasks = category.get("tasks", [])

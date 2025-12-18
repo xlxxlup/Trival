@@ -8,7 +8,7 @@ const form = reactive({
 	date: '',
 	days: 4,
 	budget: 5000,
-	preferences: '我要坐飞机往返，在规划时，不需要考虑任何价格问题',
+	preferences: '我要坐飞机往返。在规划时，不需要考虑任何价格问题、预算问题，只需要给出规划即可。',
 	people: 1
 })
 

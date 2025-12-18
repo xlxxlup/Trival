@@ -5,8 +5,8 @@
 
 # 子Agent的最大轮次配置
 SUB_AGENT_MAX_ROUNDS = {
-    # 交通助手：查询火车票、机票等
-    "transport": 2,
+    # 交通助手：查询火车票、机票等  机票一般设置1 火车高铁设置2 节约成本
+    "transport": 1,
 
     # 地图助手：查询景点、路线、周边信息
     "map": 2,
@@ -18,7 +18,7 @@ SUB_AGENT_MAX_ROUNDS = {
     "file": 2,
 
     # 天气助手：查询天气信息
-    "weather": 2,
+    "weather": 1,
 
     # 酒店助手：查询酒店信息
     "hotel": 2,

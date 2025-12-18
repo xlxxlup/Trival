@@ -170,6 +170,69 @@ class BaseSubAgent:
                 logger.warning(f"  [{self.name}] 达到最大轮次")
                 break
 
+        # 任务完成度检查和额外轮次（仅对查询任务）
+        if not is_summary_task:
+            logger.info(f"  [{self.name}] 主循环结束，开始检查任务完成度")
+
+            extra_rounds = 2  # 最多额外2轮
+            for extra_round in range(1, extra_rounds + 1):
+                # 检查任务是否完成
+                completion_status = await self._check_task_completion(task, context, all_tool_messages)
+
+                if completion_status == 1:
+                    logger.info(f"  [{self.name}] ✓ 任务已完成，无需额外轮次")
+                    break
+                else:
+                    logger.info(f"  [{self.name}] ✗ 任务未完成，开始第{extra_round}轮额外工具调用")
+
+                    # 执行额外的工具调用
+                    current_messages = task_messages.copy()
+
+                    response = await retry_llm_call(
+                        self.llm_with_tools.ainvoke,
+                        current_messages,
+                        max_retries=1,
+                        error_context=f"{self.name} 额外第{extra_round}轮"
+                    )
+
+                    if response is None:
+                        logger.error(f"  [{self.name}] 额外轮次LLM调用失败")
+                        break
+
+                    task_messages = current_messages + [response]
+
+                    # 保存响应内容
+                    if hasattr(response, 'content') and response.content:
+                        final_response_content = response.content
+
+                    # 检查是否有工具调用
+                    has_tool_calls = False
+                    if hasattr(response, 'tool_calls') and response.tool_calls:
+                        has_tool_calls = True
+                        logger.info(f"  [{self.name}] 额外第{extra_round}轮检测到工具调用: {len(response.tool_calls)}个")
+                    elif "tool_calls" in response.additional_kwargs and response.additional_kwargs['tool_calls']:
+                        has_tool_calls = True
+                        logger.info(f"  [{self.name}] 额外第{extra_round}轮检测到工具调用（旧格式）: {len(response.additional_kwargs['tool_calls'])}个")
+
+                    if not has_tool_calls:
+                        logger.info(f"  [{self.name}] 额外第{extra_round}轮未检测到工具调用，结束额外轮次")
+                        break
+
+                    # 执行工具
+                    tool_messages = await execute_tool_calls(response, self.tools, logger)
+
+                    if not tool_messages:
+                        logger.warning(f"  [{self.name}] 额外第{extra_round}轮工具执行失败")
+                        break
+
+                    task_messages.extend(tool_messages)
+                    all_tool_messages.extend(tool_messages)
+
+                    logger.info(f"  [{self.name}] 额外第{extra_round}轮完成，收集到{len(tool_messages)}个工具结果")
+
+                    if extra_round == extra_rounds:
+                        logger.warning(f"  [{self.name}] 达到额外轮次上限")
+
         # 生成总结
         summary = self._generate_summary(all_tool_messages)
 
@@ -251,11 +314,112 @@ class BaseSubAgent:
 **可用工具**:
 {tools_desc}
 
+**【通用搜索工具使用指导】（如果可用工具有搜索功能）**：
+1. **构建具体的搜索关键词**：
+   - 使用明确的地点、时间、描述
+   - 加入年份获取最新信息
+   - 避免模糊表述，使用精确词汇
+
+2. **多维度信息组合**：
+   - 价格相关信息：加入"价格"、"费用"、"门票"、"收费"
+   - 时间相关信息：加入"开放时间"、"营业时间"、"时长"
+   - 评价相关信息：加入"评价"、"评分"、"推荐"、"体验"
+
+3. **搜索结果验证**：
+   - 优先选择官方信息和权威来源
+   - 注意信息的时效性
+   - 多个来源交叉验证
+
 请使用合适的工具完成任务，并返回详细的结果。注意：
 1. 仔细选择正确的工具
 2. 提供完整的工具参数
-3. 如果需要多个步骤，请按顺序执行
+3. 如果使用搜索工具，按照上述指导构建精确的query
+4. 如果需要多个步骤，请按顺序执行
 """
+
+    async def _check_task_completion(
+        self,
+        task: str,
+        context: Dict[str, Any],
+        all_tool_messages: List[ToolMessage]
+    ) -> int:
+        """
+        使用模型批判任务是否完成
+
+        Returns:
+            0: 未完成
+            1: 已完成
+        """
+        # 构建工具结果摘要
+        tool_results_summary = ""
+        if all_tool_messages:
+            tool_results_summary = "\n".join([
+                f"{idx}. [{msg.name if hasattr(msg, 'name') else '工具'}] {str(msg.content)[:200]}..."
+                for idx, msg in enumerate(all_tool_messages, 1)
+            ])
+        else:
+            tool_results_summary = "（暂无工具调用结果）"
+
+        # 构建判断提示词
+        check_prompt = f"""请判断以下任务是否已经完成：
+
+**任务**: {task}
+
+**上下文信息**:
+- 出发地: {context.get('origin', '未知')}
+- 目的地: {context.get('destination', '未知')}
+- 日期: {context.get('date', '未知')}
+- 天数: {context.get('days', '未知')}
+- 人数: {context.get('people', '未知')}
+- 预算: {context.get('budget', '未知')}
+- 偏好: {context.get('preferences', '未知')}
+
+**已执行的工具调用结果**:
+{tool_results_summary}
+
+请仔细分析任务要求和已有的工具调用结果，判断任务是否完成。
+
+**判断标准**:
+1. 任务要求的所有必要信息是否都已经查询到
+2. 工具调用返回的结果是否有效（不是错误或空结果）
+3. 是否需要更多信息才能完成任务
+
+**重要**：只返回一个数字：
+- 返回 0：任务未完成，还需要继续查询或操作
+- 返回 1：任务已完成，所有必要信息已获取
+
+请只回复0或1，不要有任何其他内容。"""
+
+        check_message = [HumanMessage(content=check_prompt)]
+
+        try:
+            response = await retry_llm_call(
+                self.llm.ainvoke,
+                check_message,
+                max_retries=1,
+                error_context=f"{self.name} 任务完成度检查"
+            )
+
+            if response is None:
+                logger.error(f"  [{self.name}] 任务完成度检查失败，默认为已完成")
+                return 1
+
+            # 提取响应内容
+            result = response.content.strip()
+            logger.debug(f"  [{self.name}] 任务完成度检查原始返回: {result}")
+
+            # 解析返回值
+            if '0' in result:
+                return 0
+            elif '1' in result:
+                return 1
+            else:
+                logger.warning(f"  [{self.name}] 任务完成度检查返回异常结果: {result}，默认为已完成")
+                return 1
+
+        except Exception as e:
+            logger.error(f"  [{self.name}] 任务完成度检查异常: {str(e)}，默认为已完成")
+            return 1
 
     def _generate_summary(self, tool_messages: List[ToolMessage]) -> str:
         """生成工具调用总结"""
@@ -327,18 +491,40 @@ class TransportSubAgent(BaseSubAgent):
 
 **重要的工具使用优先级规则**:
 1. **优先使用专用交通工具**：优先使用12306、机票查询等专用工具来查询火车票和机票
-2. **搜索工具仅作为fallback**：只有在以下情况下才能使用搜索工具（如fetch、tavily_search）：
+2. **搜索工具仅作为fallback**：只有在以下情况下才能使用搜索工具（如fetch、zhipu_search）：
    - 当任务涉及市内接驳交通（地铁、公交、出租车、网约车）时
    - 当任务需要查询车站之间的接驳方案时
    - 当专用工具无法满足查询需求时
 3. **禁止滥用搜索工具**：不要用搜索工具来查询火车票或机票信息，这些必须使用专用工具
 
+**【重要】市内交通搜索Query构建指导**：
+1. **精确描述接驳需求**：
+   - 避免"车站怎么去市区" → 改为"北京南站到天安门广场 地铁路线 时间票价"
+   - 避免"机场交通" → 改为"上海浦东国际机场到人民广场 地铁2号线 磁悬浮 对比"
+
+2. **包含具体地点信息**：
+   - 起点和终点都要明确（具体车站、机场、景点名称）
+   - 加入城市名确保搜索准确性
+   - 例如："成都东站到春熙路 地铁 公交 出租车 时间费用对比"
+
+3. **关注实用信息**：
+   - 营业时间：首末班车时间
+   - 票价：具体费用、优惠政策
+   - 时间：路程时长、等车时间
+   - 便利性：换乘次数、步行距离
+
+4. **根据人群优化搜索**：
+   - 大件行李：查询"行李托运 电梯 无障碍通道"
+   - 赶时间：查询"最快路线 高峰期避堵"
+   - 预算有限：查询"最便宜路线 经济出行方式"
+
 请使用合适的工具完成交通查询任务。注意：
 1. 优先查询火车票（12306工具）
 2. 如果没有合适的火车，再查询机票
-3. 对于市内接驳交通（地铁/公交/出租车等），使用搜索工具
+3. 对于市内接驳交通，使用搜索工具并按照上述指导构建详细query
 4. 提供详细的班次、时间、价格信息
 5. 考虑用户的预算和出行人数
+6. 多种交通方案对比推荐
 """
 
 
@@ -447,16 +633,49 @@ class SearchSubAgent(BaseSubAgent):
 
 **上下文信息**:
 - 目的地: {context.get('destination', '未知')}
+- 出发地: {context.get('origin', '未知')}
+- 日期: {context.get('date', '未知')}
+- 天数: {context.get('days', '未知')}
+- 人数: {context.get('people', '未知')}
+- 预算: {context.get('budget', '未知')}
 - 偏好: {context.get('preferences', '未知')}
 
 **可用工具**:
 {tools_desc}
 
-请使用搜索工具完成信息查询任务。注意：
-1. 构建准确的搜索关键词
-2. 提取关键信息（如价格、评价、开放时间等）
-3. 提供可信的信息来源
-4. 结合用户偏好筛选信息
+**【重要】搜索Query构建指导**：
+1. **使用具体、明确的关键词**：
+   - 避免"好玩的地方" → 改为"北京必去景点排名2024"
+   - 避免"好吃的" → 改为"上海本地特色餐厅推荐"
+
+2. **结合时间和地点**：
+   - 加入年份"2024"、"2025"获取最新信息
+   - 明确具体城市名称，不用模糊表述
+   - 例如："2024年成都最佳旅游景点排行榜"
+
+3. **使用搜索优化技巧**：
+   - 使用引号精确匹配："成都火锅"
+   - 使用限定词：成都景点 门票价格 开放时间
+   - 组合多个关键词：北京故宫 预约方式 游玩攻略
+
+4. **针对不同信息类型优化搜索**：
+   - 攻略类："目的地 + 自由行攻略 + 注意事项"
+   - 评价类："景点/餐厅 + 真实评价 + 2024最新"
+   - 价格类："门票价格 + 官方价格 + 优惠政策"
+   - 路线类："景点之间 + 交通路线 + 时间费用"
+
+5. **结合用户具体需求**：
+   - 预算有限：加入"经济型"、"平价"、"性价比高"
+   - 家庭出游：加入"亲子"、"适合带小孩"
+   - 美食偏好：加入"特色菜"、"正宗"、"本地人推荐"
+
+**搜索策略**：
+1. 如果第一次搜索结果不够详细，尝试不同的关键词组合
+2. 对于复杂查询，可以分多次搜索不同维度的信息
+3. 优先搜索官方信息源和权威旅游网站内容
+4. 注意信息的时效性，优先选择最新内容
+
+请使用搜索工具完成信息查询任务，严格按照上述指导构建详细的搜索query。
 """
 
 
@@ -650,7 +869,7 @@ async def create_sub_agents(
 
     Args:
         tools_by_server: {server_name: [tools]} 的字典结构
-        local_tools: 本地工具列表（如 tavily_search），默认绑定给搜索助手
+        local_tools: 本地工具列表（如 zhipu_search），默认绑定给搜索助手
 
     Returns:
         Dict[agent_type, SubAgent实例]
@@ -695,7 +914,7 @@ async def create_sub_agents(
             tools_by_agent_type['search'].extend(tools)
             logger.warning(f"⚠ MCP服务器 [{server_name}] 未配置映射，默认 {len(tools)} 个工具 → search 助手")
 
-    # 将本地工具（如 tavily_search）添加到搜索助手和交通助手（作为fallback）
+    # 将本地工具（如 zhipu_search）添加到搜索助手和交通助手（作为fallback）
     if local_tools:
         tools_by_agent_type['search'].extend(local_tools)
         tools_by_agent_type['transport'].extend(local_tools)

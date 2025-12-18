@@ -23,10 +23,19 @@ trival_mcp_config = {
       "transport": "sse",
       "url": "https://mcp.api-inference.modelscope.net/662f8555dfe746/sse"
     },
-    "fetch": {
-        "transport": "sse",
-        "url": "https://mcp.api-inference.modelscope.net/727fbcd746ee4c/sse"
-    },
+    # fetch 搜索 MCP - 远程部署（已禁用 robots.txt 限制）
+    # "fetch": {
+    #     "transport": "sse",
+    #     "url": "https://mcp.api-inference.modelscope.net/727fbcd746ee4c/sse"
+    # },
+    # "fetch": {
+    #     "transport": "stdio",
+    #     "command": "uvx",
+    #     "args": [
+    #         "mcp-server-fetch",
+    #         "--ignore-robots-txt"
+    #     ]
+    # }
     # 酒店查询 MCP - 专门的酒店服务（本地部署，使用npx启动） npx jinko-mcp-dev@latest  这个mcp生产环境好像要钱
     # "jinkocx-jinko-mcp": {
     #     "transport": "stdio",
@@ -40,8 +49,8 @@ trival_mcp_config = {
 # 而不是根据工具名称硬编码绑定
 mcp_to_agent_mapping = {
     "12306-mcp": "transport",      # 12306的所有工具 → 交通助手
-    "variflight-mcp": "transport",  # 机票的所有工具 → 交通助手        
-    "fetch": ["search", "transport"],  # bing-cn-mcp-server 工具同时给搜索助手和交通助手（作为fallback）
+    "variflight-mcp": "transport",  # 机票的所有工具 → 交通助手
+    # "fetch": ["search", "transport"],  # mcp-server-fetch 工具（已禁用，使用 zhipu_search 替代）
     "mcp_tool": "weather",
     "amap-maps": ["hotel","map"] # 高德地图的所有工具 → 酒店助手、地图助手
     # 未来可以添加更多映射：
