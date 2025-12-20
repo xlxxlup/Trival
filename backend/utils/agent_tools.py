@@ -13,12 +13,13 @@ async def retry_llm_call(
     llm_func: Callable,
     *args,
     max_retries: int = 1,
-    retry_delay: float = 1.0,
+    retry_delay: float = 0.5,
     error_context: str = "LLM调用",
+    fallback_model: Optional[list[str]] = None,
     **kwargs
 ) -> Optional[Any]:
     """
-    通用的LLM调用重试包装函数
+    通用的LLM调用重试包装函数，支持模型降级
 
     Args:
         llm_func: LLM调用函数（如 llm.ainvoke 或 chain.ainvoke）
@@ -26,11 +27,19 @@ async def retry_llm_call(
         max_retries: 最大重试次数（默认1次）
         retry_delay: 重试间隔秒数（默认1秒）
         error_context: 错误上下文描述，用于日志
+        fallback_model: 降级模型列表（按顺序依次尝试），如果为None则使用默认列表["gemini-3-flash-preview", "gpt-4o-mini"]
         **kwargs: 传递给llm_func的关键字参数
 
     Returns:
         LLM响应结果，如果所有重试都失败则返回None
     """
+    # 如果未提供fallback_model，使用默认列表
+    if fallback_model is None:
+        fallback_model = ["gemini-3-flash-preview", "gemini-2.5-flash-preview-09-2025-thinking-*"]
+
+    consecutive_429_errors = 0  # 连续429错误计数  貌似是因为token太长了
+    current_fallback_index = -1  # 当前使用的后备模型索引，-1表示未降级
+
     for attempt in range(max_retries + 1):
         try:
             logger.debug(f"{error_context}: 第 {attempt + 1}/{max_retries + 1} 次尝试")
@@ -45,11 +54,48 @@ async def retry_llm_call(
 
         except Exception as e:
             is_last_attempt = (attempt == max_retries)
+            error_str = str(e)
+
+            # 检测429错误（负载饱和）
+            is_429_error = "429" in error_str or "负载已饱和" in error_str or "负载饱和" in error_str
+
+            if is_429_error:
+                consecutive_429_errors += 1
+                logger.warning(f"{error_context}: 检测到429错误（负载饱和），连续第 {consecutive_429_errors} 次")
+
+                # 如果连续遇到2次429错误且还有可用的降级模型，尝试切换
+                if consecutive_429_errors >= 2 and fallback_model and current_fallback_index < len(fallback_model) - 1:
+                    current_fallback_index += 1
+                    target_model = fallback_model[current_fallback_index]
+                    logger.warning(f"{error_context}: 连续遇到 {consecutive_429_errors} 次429错误，尝试降级到模型 [{current_fallback_index + 1}/{len(fallback_model)}]: {target_model}")
+                    try:
+                        # 尝试获取 config 参数并修改模型
+                        if 'config' in kwargs and hasattr(kwargs['config'], 'get'):
+                            # 如果config是字典类型
+                            if 'configurable' not in kwargs['config']:
+                                kwargs['config']['configurable'] = {}
+                            kwargs['config']['configurable']['model_name'] = target_model
+                        elif hasattr(llm_func, '__self__') and hasattr(llm_func.__self__, 'model_name'):
+                            # 如果llm_func是绑定方法，尝试修改实例的model_name
+                            original_model = llm_func.__self__.model_name
+                            logger.info(f"{error_context}: 将LLM实例的model_name从 {original_model} 修改为 {target_model}")
+                            llm_func.__self__.model_name = target_model
+
+                        consecutive_429_errors = 0  # 重置计数器
+                        logger.info(f"{error_context}: 已切换到降级模型 {target_model}，将继续重试")
+                        continue  # 立即重试，不等待
+                    except Exception as degrade_error:
+                        logger.error(f"{error_context}: 模型降级失败: {str(degrade_error)}")
+            else:
+                # 非429错误，重置计数器
+                consecutive_429_errors = 0
 
             if is_last_attempt:
                 logger.error(f"{error_context}: 所有重试均失败（{max_retries + 1}次尝试）")
                 logger.error(f"最后一次错误: {str(e)}")
                 logger.error(f"错误类型: {type(e).__name__}")
+                if current_fallback_index >= 0:
+                    logger.error(f"注意: 已尝试降级到模型 {fallback_model[:current_fallback_index + 1]} 但仍然失败")
                 return None
             else:
                 logger.warning(f"{error_context}: 第 {attempt + 1} 次尝试失败: {str(e)}")

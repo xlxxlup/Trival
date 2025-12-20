@@ -50,6 +50,8 @@ class AmusementState(TypedDict):
     current_task_index: Annotated[int, Field(description="当前执行到第几条任务", default=0)]
     # Observation结果
     observation_result: Annotated[dict, Field(description="Observation阶段的判断结果，包含缺失项和建议", default=None)]
+    # Replan补充循环计数
+    supplement_count: Annotated[int, Field(description="Replan补充执行的次数计数", default=0)]
 
 async def get_local_llm():
     global _llm
@@ -217,12 +219,30 @@ async def plan(state:AmusementState)->AmusementState:
     observation_result = state.get("observation_result")
     if observation_result and not observation_result.get("satisfied", True):
         observation_feedback = "**上一轮执行存在以下问题：**\n\n"
-        observation_feedback += "缺失项：\n"
-        for item in observation_result.get("missing_items", []):
-            observation_feedback += f"- {item}\n"
-        observation_feedback += "\n建议：\n"
-        for suggestion in observation_result.get("suggestions", []):
-            observation_feedback += f"- {suggestion}\n"
+
+        # 处理新旧两种格式
+        if "missing_categories" in observation_result:
+            # 新格式：按类别分组
+            observation_feedback += "缺失的任务类别：\n"
+            for category in observation_result.get("missing_categories", []):
+                category_name = category.get("category", "unknown")
+                observation_feedback += f"\n**类别: {category_name}**\n"
+                observation_feedback += "缺失信息：\n"
+                for item in category.get("missing_items", []):
+                    observation_feedback += f"- {item}\n"
+                observation_feedback += "需要执行的任务：\n"
+                for task in category.get("tasks", []):
+                    observation_feedback += f"- {task}\n"
+            observation_feedback += "\n**重要**：请只补充上述缺失的类别，不要重复已完成的任务类别。"
+        else:
+            # 旧格式：兼容处理
+            observation_feedback += "缺失项：\n"
+            for item in observation_result.get("missing_items", []):
+                observation_feedback += f"- {item}\n"
+            observation_feedback += "\n建议：\n"
+            for suggestion in observation_result.get("suggestions", []):
+                observation_feedback += f"- {suggestion}\n"
+
         logger.info("检测到observation反馈，将传递给LLM进行增量规划")
         logger.debug(f"Observation反馈内容: {observation_feedback}")
     else:
@@ -850,6 +870,21 @@ async def replan(state:AmusementState)->AmusementState:
     logger.debug(f"攻略详情: {amusement_info}")
     logger.info(f"是否需要人工介入: {response.get('need_intervention', False)}")
 
+    # 【新增】从replan响应中获取补充任务信息
+    need_supplement = response.get('need_supplement', False)
+    supplement_tasks = response.get('supplement_tasks', [])
+
+    logger.info(f"是否需要补充执行: {need_supplement}")
+    if need_supplement and supplement_tasks:
+        logger.info(f"补充任务类别数: {len(supplement_tasks)}")
+        for idx, cat in enumerate(supplement_tasks, 1):
+            category_name = cat.get("category", "unknown")
+            tasks = cat.get("tasks", [])
+            logger.info(f"  类别{idx}: {category_name}, 任务数: {len(tasks)}")
+            logger.debug(f"    任务列表: {tasks}")
+    else:
+        logger.info("✓ 所有基本信息已完整，无需补充执行")
+
     # 如果需要人工介入，记录问题（不限制次数，让LLM自己判断）
     intervention_count = state.get("intervention_count", 0)
     if response.get('need_intervention', False):
@@ -872,7 +907,10 @@ async def replan(state:AmusementState)->AmusementState:
     else:
         logger.info("✓ 不需要人工介入，流程将继续")
 
-    # 重置人工介入状态，保留collected_info
+    # 【修改】直接使用从LLM响应中获取的补充任务信息
+    # need_supplement 和 supplement_tasks 已在上面从response中提取
+
+    # 重置人工介入状态，保留collected_info，添加补充任务相关字段
     result = {
         "replan": replan,
         "amusement_info": amusement_info,
@@ -881,7 +919,9 @@ async def replan(state:AmusementState)->AmusementState:
         "intervention_stage": "replan" if response.get('need_intervention', False) else "",
         "intervention_response": None,
         "intervention_count": intervention_count,
-        "collected_info": collected_info  # 保留已收集信息（包含问题历史）
+        "collected_info": collected_info,  # 保留已收集信息（包含问题历史）
+        "need_supplement": need_supplement,
+        "supplement_tasks": supplement_tasks
     }
 
     logger.info("【REPLAN阶段结束】")
@@ -917,8 +957,13 @@ async def observation(state:AmusementState) -> Command[Literal["__end__", "plan"
         update = {
             "observation_result": {
                 "satisfied": False,
-                "missing_items": ["系统判断失败，建议重新生成攻略"],
-                "suggestions": ["重新执行完整流程"]
+                "missing_categories": [
+                    {
+                        "category": "general",
+                        "missing_items": ["系统判断失败，建议重新生成攻略"],
+                        "tasks": ["重新执行完整流程"]
+                    }
+                ]
             }
         }
         goto = "plan"
@@ -963,12 +1008,26 @@ async def observation(state:AmusementState) -> Command[Literal["__end__", "plan"
 
             observation_result = json.loads(json_text)
             logger.info("⚠️  判断结果: 攻略不满足需求")
-            logger.info("缺失项:")
-            for item in observation_result.get("missing_items", []):
-                logger.info(f"  - {item}")
-            logger.info("建议:")
-            for suggestion in observation_result.get("suggestions", []):
-                logger.info(f"  - {suggestion}")
+
+            # 处理新旧两种格式
+            if "missing_categories" in observation_result:
+                # 新格式：按类别分组
+                logger.info("缺失类别:")
+                for category in observation_result.get("missing_categories", []):
+                    logger.info(f"  类别: {category.get('category', 'unknown')}")
+                    for item in category.get("missing_items", []):
+                        logger.info(f"    - {item}")
+                    logger.info(f"    需要执行的任务:")
+                    for task in category.get("tasks", []):
+                        logger.info(f"      • {task}")
+            else:
+                # 旧格式：兼容处理
+                logger.info("缺失项:")
+                for item in observation_result.get("missing_items", []):
+                    logger.info(f"  - {item}")
+                logger.info("建议:")
+                for suggestion in observation_result.get("suggestions", []):
+                    logger.info(f"  - {suggestion}")
 
             update = {"observation_result": observation_result}
             goto = "plan"
@@ -978,8 +1037,13 @@ async def observation(state:AmusementState) -> Command[Literal["__end__", "plan"
             update = {
                 "observation_result": {
                     "satisfied": False,
-                    "missing_items": ["LLM返回格式错误，无法解析详细原因"],
-                    "suggestions": ["重新生成攻略"]
+                    "missing_categories": [
+                        {
+                            "category": "general",
+                            "missing_items": ["LLM返回格式错误，无法解析详细原因"],
+                            "tasks": ["重新生成攻略"]
+                        }
+                    ]
                 }
             }
             goto = "plan"
@@ -988,6 +1052,60 @@ async def observation(state:AmusementState) -> Command[Literal["__end__", "plan"
     logger.info("【OBSERVATION阶段结束】")
     logger.info("=" * 80)
     return Command(goto=goto, update=update)
+
+async def check_supplement(state: AmusementState) -> Command[Literal["__end__", "excute"]]:
+    """
+    检查是否需要补充执行任务
+
+    判断逻辑：
+    1. 如果need_supplement=False → 数据完整，流程结束
+    2. 如果need_supplement=True 且 supplement_count < MAX_REPLAN_SUPPLEMENT_ROUNDS → 执行补充任务
+    3. 如果supplement_count >= MAX_REPLAN_SUPPLEMENT_ROUNDS → 达到最大次数，流程结束
+    """
+    from config.sub_agent_config import MAX_REPLAN_SUPPLEMENT_ROUNDS
+
+    logger.info("=" * 80)
+    logger.info("【CHECK_SUPPLEMENT阶段开始】检查是否需要补充执行...")
+
+    need_supplement = state.get("need_supplement", False)
+    supplement_tasks = state.get("supplement_tasks", [])
+    supplement_count = state.get("supplement_count", 0)
+
+    logger.info(f"need_supplement: {need_supplement}")
+    logger.info(f"supplement_count: {supplement_count}/{MAX_REPLAN_SUPPLEMENT_ROUNDS}")
+    logger.info(f"supplement_tasks数量: {len(supplement_tasks)}")
+
+    if not need_supplement:
+        logger.info("✓ 数据完整，无需补充执行，流程结束")
+        logger.info("【CHECK_SUPPLEMENT阶段结束】")
+        logger.info("=" * 80)
+        return Command(goto="__end__")
+
+    if supplement_count >= MAX_REPLAN_SUPPLEMENT_ROUNDS:
+        logger.warning(f"⚠️  已达到最大补充次数({MAX_REPLAN_SUPPLEMENT_ROUNDS})，强制结束流程")
+        logger.info("【CHECK_SUPPLEMENT阶段结束】")
+        logger.info("=" * 80)
+        return Command(goto="__end__")
+
+    logger.info(f"✓ 需要补充执行，准备执行第{supplement_count + 1}次补充")
+    logger.info(f"补充任务类别: {[t['category'] for t in supplement_tasks]}")
+    logger.info("【CHECK_SUPPLEMENT阶段结束】")
+    logger.info("=" * 80)
+
+    # 将补充任务放入plan中，供execute使用
+    # 同时增加supplement_count
+    update = {
+        "plan": {
+            "overview": [f"补充执行（第{supplement_count + 1}轮）"],
+            "actionable_tasks": supplement_tasks
+        },
+        "supplement_count": supplement_count + 1,
+        "need_supplement": False,  # 重置标志
+        "supplement_tasks": []  # 清空补充任务列表
+    }
+
+    return Command(goto="excute", update=update)
+
 
 async def resume_router(state: AmusementState) -> Command[Literal["plan", "replan"]]:
     """
@@ -1090,7 +1208,7 @@ async def wait_user_plan(state: AmusementState) -> Command[Literal["__end__"]]:
     # 直接结束，状态已被保存，等待用户通过API恢复
     return Command(goto="__end__")
 
-async def check_intervention_after_replan(state: AmusementState) -> Command[Literal["wait_user_replan", "observation"]]:
+async def check_intervention_after_replan(state: AmusementState) -> Command[Literal["wait_user_replan", "check_supplement"]]:
     """
     在replan之后检查是否需要人工介入
     直接读取LLM在replan阶段的判断结果
@@ -1113,10 +1231,10 @@ async def check_intervention_after_replan(state: AmusementState) -> Command[Lite
         # 跳转到wait_user_replan节点，该节点会暂停并等待用户响应
         return Command(goto="wait_user_replan")
     else:
-        logger.info("✓ 不需要人工介入，继续观察")
-        logger.info("下一步: 跳转到observation节点")
+        logger.info("✓ 不需要人工介入，继续检查是否需要补充执行")
+        logger.info("下一步: 跳转到check_supplement节点")
         logger.info("=" * 80)
-        return Command(goto="observation")
+        return Command(goto="check_supplement")
 
 async def wait_user_replan(state: AmusementState) -> Command[Literal["__end__"]]:
     """
@@ -1135,13 +1253,17 @@ async def get_graph() -> StateGraph:
     """
     构建带人工介入功能的Agent工作流图
 
-    工作流（支持暂停和恢复）：
+    工作流（支持暂停和恢复，支持replan→execute补充循环）：
     START → resume_router
         → (首次执行或普通循环) plan → check_intervention_after_plan
             → (需要介入) wait_user_plan → END
-            → (不需要) excute → replan （工具调用在excute内部完成）
+            → (不需要) excute → replan → check_intervention_after_replan
+                → (需要介入) wait_user_replan → END
+                → (不需要) check_supplement
+                    → (需要补充 且 未达最大次数) excute → replan (形成补充循环)
+                    → (不需要补充 或 已达最大次数) END
         → (从plan恢复) excute → ...
-        → (从replan恢复) observation → ...
+        → (从replan恢复) check_supplement → ...
 
     恢复机制：
     - 用户响应后，API更新state的intervention_response
@@ -1154,7 +1276,7 @@ async def get_graph() -> StateGraph:
     logger.info("【GET_GRAPH】开始构建Agent工作流图...")
 
     # 注意：现在工具调用在excute节点内部完成，不再需要单独的tool_node
-    logger.info("工作流采用新的execute内部多轮工具调用机制")
+    logger.info("工作流采用新的execute内部多轮工具调用机制 + replan→execute补充循环")
 
     builder = StateGraph(state_schema = AmusementState)
 
@@ -1169,7 +1291,7 @@ async def get_graph() -> StateGraph:
         "replan",
         "check_intervention_after_replan",
         "wait_user_replan",  # 等待用户响应的节点
-        "observation"
+        "check_supplement"  # 检查是否需要补充执行的节点
     ]
 
     builder.add_node("resume_router", resume_router)
@@ -1180,7 +1302,7 @@ async def get_graph() -> StateGraph:
     builder.add_node("replan", replan)
     builder.add_node("check_intervention_after_replan", check_intervention_after_replan)
     builder.add_node("wait_user_replan", wait_user_replan)
-    builder.add_node("observation", observation)
+    builder.add_node("check_supplement", check_supplement)
 
     logger.info(f"已添加 {len(nodes)} 个节点: {', '.join(nodes)}")
 
@@ -1189,7 +1311,7 @@ async def get_graph() -> StateGraph:
     # 1. 从START开始，总是先到resume_router
     builder.add_edge(START, "resume_router")
     logger.debug("  添加边: START → resume_router")
-    # resume_router会根据intervention_stage决定跳转到plan/excute/observation
+    # resume_router会根据intervention_stage决定跳转到plan/excute/check_supplement
     # 这里不需要add_edge，因为resume_router使用Command返回值控制跳转
 
     # 2. plan的正常流程
@@ -1210,9 +1332,9 @@ async def get_graph() -> StateGraph:
     # 5. replan的正常流程
     builder.add_edge("replan", "check_intervention_after_replan")
     logger.debug("  添加边: replan → check_intervention_after_replan")
-    # check_intervention_after_replan根据need_intervention决定跳转
+    # check_intervention_after_replan根据need_intervention决定跳转到wait_user_replan或check_supplement
 
-    # 6. observation的判断流程会自动返回Command控制跳转到END或plan
+    # 6. check_supplement的判断流程会自动返回Command控制跳转到END或excute（形成补充循环）
 
     logger.info("工作流边构建完成")
     logger.info("正在编译工作流图...")

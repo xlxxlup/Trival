@@ -192,3 +192,6 @@ class ReplanWithIntervention(BaseModel):
     amusement_info: Annotated[AmusementFormat, Field(description="旅游攻略信息")]
     need_intervention: bool = Field(default=False, description="是否需要人工介入")
     intervention_request: Optional[InterventionRequest] = Field(default=None, description="人工介入请求")
+    # 补充执行相关
+    need_supplement: bool = Field(default=False, description="是否需要补充执行（缺少基本信息时为true）")
+    supplement_tasks: Optional[List[TaskCategory]] = Field(default=None, description="需要补充执行的任务列表，按类别分组")

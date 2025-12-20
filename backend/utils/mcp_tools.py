@@ -28,8 +28,13 @@ async def get_mcp_tools(mcp_config=trival_mcp_config, timeout=30):
             logger.info(f"正在连接MCP服务器: {server_name}")
             logger.debug(f"服务器配置: {server_config}")
 
-            # 为单个服务器创建客户端
-            single_config = {server_name: server_config}
+            # 获取禁用工具列表（在创建客户端之前提取）
+            disabled_tools = server_config.get('disabled_tools', [])
+
+            # 创建一个不包含 disabled_tools 的配置副本传递给客户端
+            # 因为 MultiServerMCPClient 不认识这个自定义字段
+            clean_config = {k: v for k, v in server_config.items() if k != 'disabled_tools'}
+            single_config = {server_name: clean_config}
             client = MultiServerMCPClient(single_config)
 
             # 使用asyncio.wait_for添加超时控制
@@ -37,6 +42,15 @@ async def get_mcp_tools(mcp_config=trival_mcp_config, timeout=30):
                 client.get_tools(),
                 timeout=timeout
             )
+
+            # 过滤掉禁用的工具
+            if disabled_tools:
+                original_count = len(tools)
+                tools = [tool for tool in tools if tool.name not in disabled_tools]
+                filtered_count = original_count - len(tools)
+
+                if filtered_count > 0:
+                    logger.info(f"✓ 已过滤 {server_name} 的 {filtered_count} 个禁用工具: {disabled_tools}")
 
             tools_by_server[server_name] = tools
             logger.info(f"✓ 成功连接 {server_name}，获取到 {len(tools)} 个工具")

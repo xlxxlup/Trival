@@ -11,6 +11,24 @@ from utils import get_llm
 from utils.agent_tools import retry_llm_call, execute_tool_calls
 from utils.tool_data_storage import get_tool_storage
 from config import get_max_rounds
+from prompts import (
+    SUB_AGENT_SUMMARY_TASK_PROMPT,
+    SUB_AGENT_QUERY_TASK_PROMPT,
+    TASK_COMPLETION_CHECK_PROMPT,
+    EXTRA_TOOL_CALL_GUIDANCE_PROMPT,
+    TRANSPORT_AGENT_SUMMARY_TASK_PROMPT,
+    TRANSPORT_AGENT_QUERY_TASK_PROMPT,
+    MAP_AGENT_SUMMARY_TASK_PROMPT,
+    MAP_AGENT_QUERY_TASK_PROMPT,
+    SEARCH_AGENT_SUMMARY_TASK_PROMPT,
+    SEARCH_AGENT_QUERY_TASK_PROMPT,
+    FILE_AGENT_SUMMARY_TASK_PROMPT,
+    FILE_AGENT_QUERY_TASK_PROMPT,
+    WEATHER_AGENT_SUMMARY_TASK_PROMPT,
+    WEATHER_AGENT_QUERY_TASK_PROMPT,
+    HOTEL_AGENT_SUMMARY_TASK_PROMPT,
+    HOTEL_AGENT_QUERY_TASK_PROMPT
+)
 
 logger = logging.getLogger("agent.sub_agents")
 
@@ -215,16 +233,27 @@ class BaseSubAgent:
             extra_rounds = 2  # 最多额外2轮
             for extra_round in range(1, extra_rounds + 1):
                 # 检查任务是否完成
-                completion_status = await self._check_task_completion(task, context, all_tool_messages)
+                completion_result = await self._check_task_completion(task, context, all_tool_messages)
+                completion_status = completion_result["completed"]
+                completion_reason = completion_result["reason"]
 
                 if completion_status == 1:
                     logger.info(f"  [{self.name}] ✓ 任务已完成，无需额外轮次")
+                    logger.info(f"  [{self.name}] 完成原因: {completion_reason}")
                     break
                 else:
                     logger.info(f"  [{self.name}] ✗ 任务未完成，开始第{extra_round}轮额外工具调用")
+                    logger.info(f"  [{self.name}] 未完成原因: {completion_reason}")
 
-                    # 执行额外的工具调用
+                    # 执行额外的工具调用，并将未完成的原因告知LLM
                     current_messages = task_messages.copy()
+
+                    # 添加一条包含未完成原因的提示消息，指导LLM进行补充查询
+                    guidance_content = EXTRA_TOOL_CALL_GUIDANCE_PROMPT.format(
+                        incomplete_reason=completion_reason
+                    )
+                    guidance_message = HumanMessage(content=guidance_content)
+                    current_messages.append(guidance_message)
 
                     response = await retry_llm_call(
                         self.llm_with_tools.ainvoke,
@@ -299,13 +328,18 @@ class BaseSubAgent:
                         logger.warning(f"  [{self.name}] 达到额外轮次上限")
 
             # 两次额外轮次后，再次检查任务完成度
-            final_completion_status = await self._check_task_completion(task, context, all_tool_messages)
+            final_completion_result = await self._check_task_completion(task, context, all_tool_messages)
+            final_completion_status = final_completion_result["completed"]
+            final_completion_reason = final_completion_result["reason"]
 
             if final_completion_status == 0:
                 logger.warning(f"  [{self.name}] ⚠ 两次额外轮次后任务仍未完成，尝试使用zhipu_search补全信息")
+                logger.warning(f"  [{self.name}] 未完成原因: {final_completion_reason}")
 
-                # 构建搜索query
-                search_query = await self._build_fallback_search_query(task, context, all_tool_messages)
+                # 构建搜索query（传入未完成的原因）
+                search_query = await self._build_fallback_search_query(
+                    task, context, all_tool_messages, final_completion_reason
+                )
                 logger.info(f"  [{self.name}] 构建搜索query: {search_query}")
 
                 # 直接调用zhipu_search函数
@@ -369,133 +403,70 @@ class BaseSubAgent:
 
         # 如果有之前的工具调用结果，说明这是总结任务
         if previous_tool_results:
-            return f"""你是一个专门负责{self.description}的助手。
-
-**这是一个总结任务**，你需要基于之前查询任务获得的数据，进行分析、比对、计算或总结。
-
-**任务**: {task}
-
-**上下文信息**:
-- 出发地: {context.get('origin', '未知')}
-- 目的地: {context.get('destination', '未知')}
-- 日期: {context.get('date', '未知')}
-- 天数: {context.get('days', '未知')}
-- 人数: {context.get('people', '未知')}
-- 预算: {context.get('budget', '未知')}
-- 偏好: {context.get('preferences', '未知')}
-
-**重要说明**：
-1. 这是一个总结任务，**不需要调用任何工具**
-2. 之前的查询任务已经获取了所需的原始数据（共{len(previous_tool_results)}个结果）
-3. 你只需要基于这些数据进行分析、比对、总结即可
-4. 直接用文字回答即可，无需调用工具
-
-请基于之前查询的数据，完成总结任务。
-"""
+            return SUB_AGENT_SUMMARY_TASK_PROMPT.format(
+                description=self.description,
+                task=task,
+                origin=context.get('origin', '未知'),
+                destination=context.get('destination', '未知'),
+                date=context.get('date', '未知'),
+                days=context.get('days', '未知'),
+                people=context.get('people', '未知'),
+                budget=context.get('budget', '未知'),
+                preferences=context.get('preferences', '未知'),
+                num_results=len(previous_tool_results)
+            )
         else:
             # 查询任务
-            return f"""你是一个专门负责{self.description}的助手。
-
-**任务**: {task}
-
-**上下文信息**:
-- 出发地: {context.get('origin', '未知')}
-- 目的地: {context.get('destination', '未知')}
-- 日期: {context.get('date', '未知')}
-- 天数: {context.get('days', '未知')}
-- 人数: {context.get('people', '未知')}
-- 预算: {context.get('budget', '未知')}
-- 偏好: {context.get('preferences', '未知')}
-
-**可用工具**:
-{tools_desc}
-
-**【通用搜索工具使用指导】（如果可用工具有搜索功能）**：
-1. **构建具体的搜索关键词**：
-   - 使用明确的地点、时间、描述
-   - 加入年份获取最新信息
-   - 避免模糊表述，使用精确词汇
-
-2. **多维度信息组合**：
-   - 价格相关信息：加入"价格"、"费用"、"门票"、"收费"
-   - 时间相关信息：加入"开放时间"、"营业时间"、"时长"
-   - 评价相关信息：加入"评价"、"评分"、"推荐"、"体验"
-
-3. **搜索结果验证**：
-   - 优先选择官方信息和权威来源
-   - 注意信息的时效性
-   - 多个来源交叉验证
-
-请使用合适的工具完成任务，并返回详细的结果。注意：
-1. 仔细选择正确的工具
-2. 提供完整的工具参数
-3. 如果使用搜索工具，按照上述指导构建精确的query
-4. 如果需要多个步骤，请按顺序执行
-"""
+            return SUB_AGENT_QUERY_TASK_PROMPT.format(
+                description=self.description,
+                task=task,
+                origin=context.get('origin', '未知'),
+                destination=context.get('destination', '未知'),
+                date=context.get('date', '未知'),
+                days=context.get('days', '未知'),
+                people=context.get('people', '未知'),
+                budget=context.get('budget', '未知'),
+                preferences=context.get('preferences', '未知'),
+                tools_desc=tools_desc
+            )
 
     async def _check_task_completion(
         self,
         task: str,
         context: Dict[str, Any],
         all_tool_messages: List[ToolMessage]
-    ) -> int:
+    ) -> Dict[str, Any]:
         """
         使用模型批判任务是否完成
 
         Returns:
-            0: 未完成
-            1: 已完成
+            {
+                "completed": int,  # 0: 未完成, 1: 已完成
+                "reason": str      # 完成/未完成的原因
+            }
         """
-        # 构建工具结果摘要
+        # 构建工具结果摘要（返回完整内容，不截断）
         tool_results_summary = ""
         if all_tool_messages:
             tool_results_summary = "\n".join([
-                f"{idx}. [{msg.name if hasattr(msg, 'name') else '工具'}] {str(msg.content)[:200]}..."
+                f"{idx}. [{msg.name if hasattr(msg, 'name') else '工具'}] {str(msg.content)}"
                 for idx, msg in enumerate(all_tool_messages, 1)
             ])
         else:
             tool_results_summary = "（暂无工具调用结果）"
 
         # 构建判断提示词
-        check_prompt = f"""请判断以下任务是否已经完成：
-
-**任务**: {task}
-
-**上下文信息**:
-- 出发地: {context.get('origin', '未知')}
-- 目的地: {context.get('destination', '未知')}
-- 日期: {context.get('date', '未知')}
-- 天数: {context.get('days', '未知')}
-- 人数: {context.get('people', '未知')}
-- 预算: {context.get('budget', '未知')}
-- 偏好: {context.get('preferences', '未知')}
-
-**已执行的工具调用结果**:
-{tool_results_summary}
-
-请仔细分析任务要求和已有的工具调用结果，判断任务是否完成。
-
-**判断标准**:
-1. **只要获得基本信息就算完成**，不强求附加信息：
-   - 机票：时间、航班号、价格有了就行(也必须有这三个信息)，改签、行李额度等是附加信息（有更好，没有也算完成）
-   - 酒店：酒店名称、位置等基本信息有了就行，延迟退房等是附加信息（有更好，没有也算完成）
-   - 火车票：车次、时间、价格有了就行(也必须有这三个信息)，座位类型、余票数等是附加信息（有更好，没有也算完成）
-   - 天气：温度、天气状况有了就行，湿度、风力等是附加信息（有更好，没有也算完成）
-   - 景点：景点名称、位置有了就行，营业时间、门票价格等是附加信息（有更好，没有也算完成）
-2. 工具调用返回的结果是否有效（不是错误或空结果）
-3. 基本信息是否已经查询到（不要求完美和全面，有基础数据即可）
-
-**重要原则**：
-- 机票或者火车高铁票一定需要价格信息，没有则不能完成
-- 不要追求完美，基本信息齐全即可判定完成
-- 附加信息（如改签政策、行李额度、延迟退房等）是锦上添花，不影响任务完成判断
-- 只要任务要求的核心数据已获取，即使不够详细，也应判定为完成
-
-**重要**：只返回一个数字：
-- 返回 0：任务未完成，基本信息还没有获取到
-- 返回 1：任务已完成，基本信息已获取（即使附加信息缺失也算完成）
-
-请只回复0或1，不要有任何其他内容。"""
+        check_prompt = TASK_COMPLETION_CHECK_PROMPT.format(
+            task=task,
+            origin=context.get('origin', '未知'),
+            destination=context.get('destination', '未知'),
+            date=context.get('date', '未知'),
+            days=context.get('days', '未知'),
+            people=context.get('people', '未知'),
+            budget=context.get('budget', '未知'),
+            preferences=context.get('preferences', '未知'),
+            tool_results_summary=tool_results_summary
+        )
 
         check_message = [HumanMessage(content=check_prompt)]
 
@@ -509,35 +480,56 @@ class BaseSubAgent:
 
             if response is None:
                 logger.error(f"  [{self.name}] 任务完成度检查失败，默认为已完成")
-                return 1
+                return {"completed": 1, "reason": "LLM调用失败，默认为已完成"}
 
             # 提取响应内容
             result = response.content.strip()
             logger.debug(f"  [{self.name}] 任务完成度检查原始返回: {result}")
 
-            # 解析返回值
-            if '0' in result:
-                return 0
-            elif '1' in result:
-                return 1
+            # 解析返回值，格式为 "数字|原因"
+            if '|' in result:
+                parts = result.split('|', 1)
+                status_str = parts[0].strip()
+                reason = parts[1].strip() if len(parts) > 1 else ""
+
+                if '0' in status_str:
+                    return {"completed": 0, "reason": reason or "任务未完成"}
+                elif '1' in status_str:
+                    return {"completed": 1, "reason": reason or "任务已完成"}
+                else:
+                    logger.warning(f"  [{self.name}] 任务完成度检查返回异常状态: {status_str}，默认为已完成")
+                    return {"completed": 1, "reason": "返回状态异常，默认为已完成"}
             else:
-                logger.warning(f"  [{self.name}] 任务完成度检查返回异常结果: {result}，默认为已完成")
-                return 1
+                # 兼容旧格式（只返回数字）
+                if '0' in result:
+                    return {"completed": 0, "reason": "任务未完成（未提供详细原因）"}
+                elif '1' in result:
+                    return {"completed": 1, "reason": "任务已完成"}
+                else:
+                    logger.warning(f"  [{self.name}] 任务完成度检查返回异常结果: {result}，默认为已完成")
+                    return {"completed": 1, "reason": "返回格式异常，默认为已完成"}
 
         except Exception as e:
             logger.error(f"  [{self.name}] 任务完成度检查异常: {str(e)}，默认为已完成")
-            return 1
+            return {"completed": 1, "reason": f"检查异常: {str(e)}，默认为已完成"}
 
     async def _build_fallback_search_query(
         self,
         task: str,
         context: Dict[str, Any],
-        all_tool_messages: List[ToolMessage]
+        all_tool_messages: List[ToolMessage],
+        incomplete_reason: str = ""
     ) -> str:
         """
         构建补全搜索的query
 
-        基于任务描述、上下文和已有的工具调用结果，构建一个合适的搜索query
+        基于任务描述、上下文、已有的工具调用结果和未完成原因，构建一个合适的搜索query
+
+        Args:
+            task: 任务描述
+            context: 上下文信息
+            all_tool_messages: 已有的工具调用结果
+            incomplete_reason: 任务未完成的原因，用于构建更精准的搜索query
         """
         # 提取上下文关键信息
         origin = context.get('origin', '')
@@ -547,6 +539,7 @@ class BaseSubAgent:
 
         # 分析任务类型，构建针对性的搜索query
         task_lower = task.lower()
+        reason_lower = incomplete_reason.lower() if incomplete_reason else ''
 
         # 构建基础query部分
         query_parts = []
@@ -557,17 +550,67 @@ class BaseSubAgent:
 
         # 根据任务类型添加特定关键词
         if '机票' in task or '航班' in task or 'flight' in task_lower:
-            query_parts.extend([origin, '机票', '价格', '航班', date if date else '2025'])
+            query_parts.extend([origin, '机票', date if date else '2025'])
+            # 根据未完成原因添加针对性关键词
+            if '价格' in reason_lower:
+                query_parts.extend(['价格', '票价', '费用'])
+            elif '航班' in reason_lower or '航班号' in reason_lower:
+                query_parts.extend(['航班号', '班次'])
+            elif '时间' in reason_lower:
+                query_parts.extend(['起飞时间', '航班时刻表'])
+            else:
+                query_parts.extend(['价格', '航班', '时间'])
         elif '火车' in task or '高铁' in task or 'train' in task_lower:
-            query_parts.extend([origin, '火车票', '高铁', '车次', '价格', date if date else '2025'])
+            query_parts.extend([origin, '火车票', '高铁', date if date else '2025'])
+            # 根据未完成原因添加针对性关键词
+            if '价格' in reason_lower:
+                query_parts.extend(['票价', '价格'])
+            elif '车次' in reason_lower:
+                query_parts.extend(['车次', '班次'])
+            elif '时间' in reason_lower:
+                query_parts.extend(['发车时间', '列车时刻表'])
+            else:
+                query_parts.extend(['车次', '价格', '时间'])
         elif '酒店' in task or 'hotel' in task_lower or '住宿' in task:
-            query_parts.extend(['酒店', '住宿', '价格', '推荐', date if date else '2025'])
+            query_parts.extend(['酒店', '住宿', date if date else '2025'])
+            # 根据未完成原因添加针对性关键词
+            if '价格' in reason_lower:
+                query_parts.extend(['价格', '房价'])
+            elif '位置' in reason_lower or '地址' in reason_lower:
+                query_parts.extend(['位置', '地址', '交通'])
+            elif '名称' in reason_lower:
+                query_parts.extend(['推荐', '酒店名称'])
+            else:
+                query_parts.extend(['价格', '推荐'])
         elif '天气' in task or 'weather' in task_lower:
-            query_parts.extend(['天气', '温度', '预报', date if date else '2025'])
+            query_parts.extend(['天气', date if date else '2025'])
+            # 根据未完成原因添加针对性关键词
+            if '温度' in reason_lower:
+                query_parts.extend(['温度', '气温'])
+            elif '天气状况' in reason_lower or '状况' in reason_lower:
+                query_parts.extend(['天气状况', '晴雨'])
+            else:
+                query_parts.extend(['温度', '天气预报'])
         elif '景点' in task or '旅游' in task or '游览' in task:
-            query_parts.extend(['旅游景点', '门票', '开放时间', '推荐', '2025'])
+            query_parts.extend(['旅游景点', '2025'])
+            # 根据未完成原因添加针对性关键词
+            if '门票' in reason_lower or '价格' in reason_lower:
+                query_parts.extend(['门票价格'])
+            elif '时间' in reason_lower or '营业' in reason_lower:
+                query_parts.extend(['开放时间', '营业时间'])
+            elif '位置' in reason_lower or '地址' in reason_lower:
+                query_parts.extend(['位置', '地址'])
+            else:
+                query_parts.extend(['门票', '开放时间', '推荐'])
         elif '美食' in task or '餐厅' in task or '吃' in task:
-            query_parts.extend(['美食', '餐厅', '推荐', '特色', '2025'])
+            query_parts.extend(['美食', '餐厅', '2025'])
+            # 根据未完成原因添加针对性关键词
+            if '推荐' in reason_lower:
+                query_parts.extend(['推荐', '特色'])
+            elif '位置' in reason_lower or '地址' in reason_lower:
+                query_parts.extend(['位置', '地址'])
+            else:
+                query_parts.extend(['推荐', '特色'])
         else:
             # 默认通用搜索
             query_parts.extend(['信息', '推荐', '攻略', '2025'])
@@ -575,6 +618,23 @@ class BaseSubAgent:
         # 添加预算信息
         if budget:
             query_parts.append(f'预算{budget}')
+
+        # 如果未完成原因中有其他有用的关键词，也加入搜索
+        if incomplete_reason:
+            # 提取未完成原因中的关键信息词
+            reason_keywords = []
+            if '缺少' in reason_lower:
+                # 尝试提取"缺少XX信息"中的XX
+                import re
+                match = re.search(r'缺少(.{1,10}?)(?:信息|数据|资料)', reason_lower)
+                if match:
+                    keyword = match.group(1).strip()
+                    if keyword and keyword not in ' '.join(query_parts):
+                        reason_keywords.append(keyword)
+
+            if reason_keywords:
+                query_parts.extend(reason_keywords)
+                logger.debug(f"  [{self.name}] 从未完成原因中提取关键词: {reason_keywords}")
 
         # 组合成搜索query
         search_query = ' '.join([part for part in query_parts if part])
@@ -584,6 +644,8 @@ class BaseSubAgent:
             search_query = f"{destination} {task} 2025"
 
         logger.debug(f"  [{self.name}] 构建的补全搜索query: {search_query}")
+        if incomplete_reason:
+            logger.debug(f"  [{self.name}] 基于未完成原因: {incomplete_reason}")
         return search_query
 
     def _generate_summary(self, tool_messages: List[ToolMessage]) -> str:
@@ -617,80 +679,24 @@ class TransportSubAgent(BaseSubAgent):
             for tool in self.tools
         ])
 
-        # 如果有之前的工具调用结果，说明这是总结任务
         if previous_tool_results:
-            return f"""你是一个专门负责【交通查询】的助手，擅长查询机票、火车票等长距离交通工具。
-
-**这是一个总结任务**，你需要基于之前查询任务获得的交通数据，进行分析、比对、计算或总结。
-
-**任务**: {task}
-
-**上下文信息**:
-- 出发地: {context.get('origin', '未知')}
-- 目的地: {context.get('destination', '未知')}
-- 日期: {context.get('date', '未知')}
-- 人数: {context.get('people', '未知')}
-
-**重要说明**：
-1. 这是一个总结任务，**不需要调用任何工具**
-2. 之前的查询任务已经获取了所需的交通数据（共{len(previous_tool_results)}个结果）
-3. 你只需要基于这些数据进行分析、比对、推荐即可
-4. 直接用文字回答即可，无需调用工具
-
-请基于之前查询的交通数据，完成总结任务。
-"""
+            return TRANSPORT_AGENT_SUMMARY_TASK_PROMPT.format(
+                task=task,
+                origin=context.get('origin', '未知'),
+                destination=context.get('destination', '未知'),
+                date=context.get('date', '未知'),
+                people=context.get('people', '未知'),
+                num_results=len(previous_tool_results)
+            )
         else:
-            # 查询任务
-            return f"""你是一个专门负责【交通查询】的助手，擅长查询机票、火车票等长距离交通工具。
-
-**任务**: {task}
-
-**上下文信息**:
-- 出发地: {context.get('origin', '未知')}
-- 目的地: {context.get('destination', '未知')}
-- 日期: {context.get('date', '未知')}
-- 人数: {context.get('people', '未知')}
-
-**可用工具**:
-{tools_desc}
-
-**重要的工具使用优先级规则**:
-1. **优先使用专用交通工具**：优先使用12306、机票查询等专用工具来查询火车票和机票
-2. **搜索工具仅作为fallback**：只有在以下情况下才能使用搜索工具（如fetch、zhipu_search）：
-   - 当任务涉及市内接驳交通（地铁、公交、出租车、网约车）时
-   - 当任务需要查询车站之间的接驳方案时
-   - 当专用工具无法满足查询需求时
-3. **禁止滥用搜索工具**：不要用搜索工具来查询火车票或机票信息，这些必须使用专用工具
-
-**【重要】市内交通搜索Query构建指导**：
-1. **精确描述接驳需求**：
-   - 避免"车站怎么去市区" → 改为"北京南站到天安门广场 地铁路线 时间票价"
-   - 避免"机场交通" → 改为"上海浦东国际机场到人民广场 地铁2号线 磁悬浮 对比"
-
-2. **包含具体地点信息**：
-   - 起点和终点都要明确（具体车站、机场、景点名称）
-   - 加入城市名确保搜索准确性
-   - 例如："成都东站到春熙路 地铁 公交 出租车 时间费用对比"
-
-3. **关注实用信息**：
-   - 营业时间：首末班车时间
-   - 票价：具体费用、优惠政策
-   - 时间：路程时长、等车时间
-   - 便利性：换乘次数、步行距离
-
-4. **根据人群优化搜索**：
-   - 大件行李：查询"行李托运 电梯 无障碍通道"
-   - 赶时间：查询"最快路线 高峰期避堵"
-   - 预算有限：查询"最便宜路线 经济出行方式"
-
-请使用合适的工具完成交通查询任务。注意：
-1. 优先查询火车票（12306工具）
-2. 如果没有合适的火车，再查询机票
-3. 对于市内接驳交通，使用搜索工具并按照上述指导构建详细query
-4. 提供详细的班次、时间、价格信息
-5. 考虑用户的预算和出行人数
-6. 多种交通方案对比推荐
-"""
+            return TRANSPORT_AGENT_QUERY_TASK_PROMPT.format(
+                task=task,
+                origin=context.get('origin', '未知'),
+                destination=context.get('destination', '未知'),
+                date=context.get('date', '未知'),
+                people=context.get('people', '未知'),
+                tools_desc=tools_desc
+            )
 
 
 class MapSubAgent(BaseSubAgent):
@@ -711,45 +717,20 @@ class MapSubAgent(BaseSubAgent):
             for tool in self.tools
         ])
 
-        # 如果有之前的工具调用结果，说明这是总结任务
         if previous_tool_results:
-            return f"""你是一个专门负责【地图查询】的助手，擅长使用高德地图查询景点、路线、周边设施等信息。
-
-**这是一个总结任务**，你需要基于之前查询任务获得的地图数据，进行分析、比对、计算或总结。
-
-**任务**: {task}
-
-**上下文信息**:
-- 目的地: {context.get('destination', '未知')}
-- 偏好: {context.get('preferences', '未知')}
-
-**重要说明**：
-1. 这是一个总结任务，**不需要调用任何工具**
-2. 之前的查询任务已经获取了所需的地图数据（共{len(previous_tool_results)}个结果）
-3. 你只需要基于这些数据进行分析、比对、推荐即可
-4. 直接用文字回答即可，无需调用工具
-
-请基于之前查询的地图数据，完成总结任务。
-"""
+            return MAP_AGENT_SUMMARY_TASK_PROMPT.format(
+                task=task,
+                destination=context.get('destination', '未知'),
+                preferences=context.get('preferences', '未知'),
+                num_results=len(previous_tool_results)
+            )
         else:
-            # 查询任务
-            return f"""你是一个专门负责【地图查询】的助手，擅长使用高德地图查询景点、路线、周边设施等信息。
-
-**任务**: {task}
-
-**上下文信息**:
-- 目的地: {context.get('destination', '未知')}
-- 偏好: {context.get('preferences', '未知')}
-
-**可用工具**:
-{tools_desc}
-
-请使用高德地图工具完成查询任务。注意：
-1. 查询景点信息时提供详细的地址、评分、简介
-2. 查询路线时考虑距离和时间
-3. 查询周边设施（餐饮、住宿等）时提供多个选项
-4. 结合用户偏好推荐合适的地点
-"""
+            return MAP_AGENT_QUERY_TASK_PROMPT.format(
+                task=task,
+                destination=context.get('destination', '未知'),
+                preferences=context.get('preferences', '未知'),
+                tools_desc=tools_desc
+            )
 
 
 class SearchSubAgent(BaseSubAgent):
@@ -770,78 +751,25 @@ class SearchSubAgent(BaseSubAgent):
             for tool in self.tools
         ])
 
-        # 如果有之前的工具调用结果，说明这是总结任务
         if previous_tool_results:
-            return f"""你是一个专门负责【互联网搜索】的助手，擅长查找最新的旅游资讯、攻略、评价等信息。
-
-**这是一个总结任务**，你需要基于之前查询任务获得的搜索数据，进行分析、比对、计算或总结。
-
-**任务**: {task}
-
-**上下文信息**:
-- 目的地: {context.get('destination', '未知')}
-- 偏好: {context.get('preferences', '未知')}
-
-**重要说明**：
-1. 这是一个总结任务，**不需要调用任何工具**
-2. 之前的查询任务已经获取了所需的搜索数据（共{len(previous_tool_results)}个结果）
-3. 你只需要基于这些数据进行分析、比对、总结即可
-4. 直接用文字回答即可，无需调用工具
-
-请基于之前查询的搜索数据，完成总结任务。
-"""
+            return SEARCH_AGENT_SUMMARY_TASK_PROMPT.format(
+                task=task,
+                destination=context.get('destination', '未知'),
+                preferences=context.get('preferences', '未知'),
+                num_results=len(previous_tool_results)
+            )
         else:
-            # 查询任务
-            return f"""你是一个专门负责【互联网搜索】的助手，擅长查找最新的旅游资讯、攻略、评价等信息。
-
-**任务**: {task}
-
-**上下文信息**:
-- 目的地: {context.get('destination', '未知')}
-- 出发地: {context.get('origin', '未知')}
-- 日期: {context.get('date', '未知')}
-- 天数: {context.get('days', '未知')}
-- 人数: {context.get('people', '未知')}
-- 预算: {context.get('budget', '未知')}
-- 偏好: {context.get('preferences', '未知')}
-
-**可用工具**:
-{tools_desc}
-
-**【重要】搜索Query构建指导**：
-1. **使用具体、明确的关键词**：
-   - 避免"好玩的地方" → 改为"北京必去景点排名2024"
-   - 避免"好吃的" → 改为"上海本地特色餐厅推荐"
-
-2. **结合时间和地点**：
-   - 加入年份"2024"、"2025"获取最新信息
-   - 明确具体城市名称，不用模糊表述
-   - 例如："2024年成都最佳旅游景点排行榜"
-
-3. **使用搜索优化技巧**：
-   - 使用引号精确匹配："成都火锅"
-   - 使用限定词：成都景点 门票价格 开放时间
-   - 组合多个关键词：北京故宫 预约方式 游玩攻略
-
-4. **针对不同信息类型优化搜索**：
-   - 攻略类："目的地 + 自由行攻略 + 注意事项"
-   - 评价类："景点/餐厅 + 真实评价 + 2024最新"
-   - 价格类："门票价格 + 官方价格 + 优惠政策"
-   - 路线类："景点之间 + 交通路线 + 时间费用"
-
-5. **结合用户具体需求**：
-   - 预算有限：加入"经济型"、"平价"、"性价比高"
-   - 家庭出游：加入"亲子"、"适合带小孩"
-   - 美食偏好：加入"特色菜"、"正宗"、"本地人推荐"
-
-**搜索策略**：
-1. 如果第一次搜索结果不够详细，尝试不同的关键词组合
-2. 对于复杂查询，可以分多次搜索不同维度的信息
-3. 优先搜索官方信息源和权威旅游网站内容
-4. 注意信息的时效性，优先选择最新内容
-
-请使用搜索工具完成信息查询任务，严格按照上述指导构建详细的搜索query。
-"""
+            return SEARCH_AGENT_QUERY_TASK_PROMPT.format(
+                task=task,
+                destination=context.get('destination', '未知'),
+                origin=context.get('origin', '未知'),
+                date=context.get('date', '未知'),
+                days=context.get('days', '未知'),
+                people=context.get('people', '未知'),
+                budget=context.get('budget', '未知'),
+                preferences=context.get('preferences', '未知'),
+                tools_desc=tools_desc
+            )
 
 
 class FileSubAgent(BaseSubAgent):
@@ -862,36 +790,16 @@ class FileSubAgent(BaseSubAgent):
             for tool in self.tools
         ])
 
-        # 如果有之前的工具调用结果，说明这是总结任务
         if previous_tool_results:
-            return f"""你是一个专门负责【文件操作】的助手，擅长读取和写入文件。
-
-**这是一个总结任务**，你需要基于之前查询任务获得的文件数据，进行分析、比对、计算或总结。
-
-**任务**: {task}
-
-**重要说明**：
-1. 这是一个总结任务，**不需要调用任何工具**
-2. 之前的查询任务已经获取了所需的文件数据（共{len(previous_tool_results)}个结果）
-3. 你只需要基于这些数据进行分析、比对、总结即可
-4. 直接用文字回答即可，无需调用工具
-
-请基于之前查询的文件数据，完成总结任务。
-"""
+            return FILE_AGENT_SUMMARY_TASK_PROMPT.format(
+                task=task,
+                num_results=len(previous_tool_results)
+            )
         else:
-            # 查询任务
-            return f"""你是一个专门负责【文件操作】的助手，擅长读取和写入文件。
-
-**任务**: {task}
-
-**可用工具**:
-{tools_desc}
-
-请使用文件工具完成任务。注意：
-1. 读取文件时检查文件是否存在
-2. 写入文件时使用合适的格式
-3. 处理可能的文件错误
-"""
+            return FILE_AGENT_QUERY_TASK_PROMPT.format(
+                task=task,
+                tools_desc=tools_desc
+            )
 
 
 class WeatherSubAgent(BaseSubAgent):
@@ -912,47 +820,22 @@ class WeatherSubAgent(BaseSubAgent):
             for tool in self.tools
         ])
 
-        # 如果有之前的工具调用结果，说明这是总结任务
         if previous_tool_results:
-            return f"""你是一个专门负责【天气查询】的助手，擅长查询目的地的天气信息。
-
-**这是一个总结任务**，你需要基于之前查询任务获得的天气数据，进行分析、比对、计算或总结。
-
-**任务**: {task}
-
-**上下文信息**:
-- 目的地: {context.get('destination', '未知')}
-- 日期: {context.get('date', '未知')}
-- 天数: {context.get('days', '未知')}
-
-**重要说明**：
-1. 这是一个总结任务，**不需要调用任何工具**
-2. 之前的查询任务已经获取了所需的天气数据（共{len(previous_tool_results)}个结果）
-3. 你只需要基于这些数据进行分析、比对、总结即可
-4. 直接用文字回答即可，无需调用工具
-
-请基于之前查询的天气数据，完成总结任务。
-"""
+            return WEATHER_AGENT_SUMMARY_TASK_PROMPT.format(
+                task=task,
+                destination=context.get('destination', '未知'),
+                date=context.get('date', '未知'),
+                days=context.get('days', '未知'),
+                num_results=len(previous_tool_results)
+            )
         else:
-            # 查询任务
-            return f"""你是一个专门负责【天气查询】的助手，擅长查询目的地的天气信息。
-
-**任务**: {task}
-
-**上下文信息**:
-- 目的地: {context.get('destination', '未知')}
-- 日期: {context.get('date', '未知')}
-- 天数: {context.get('days', '未知')}
-
-**可用工具**:
-{tools_desc}
-
-请使用天气查询工具完成任务。注意：
-1. 提供准确的天气预报信息（温度、湿度、降水等）
-2. 查询旅行期间多天的天气情况
-3. 提供穿衣建议和出行提醒
-4. 关注极端天气预警
-"""
+            return WEATHER_AGENT_QUERY_TASK_PROMPT.format(
+                task=task,
+                destination=context.get('destination', '未知'),
+                date=context.get('date', '未知'),
+                days=context.get('days', '未知'),
+                tools_desc=tools_desc
+            )
 
 
 class HotelSubAgent(BaseSubAgent):
@@ -973,52 +856,26 @@ class HotelSubAgent(BaseSubAgent):
             for tool in self.tools
         ])
 
-        # 如果有之前的工具调用结果，说明这是总结任务
         if previous_tool_results:
-            return f"""你是一个专门负责【酒店查询】的助手，擅长查询目的地的酒店住宿信息。
-
-**这是一个总结任务**，你需要基于之前查询任务获得的酒店数据，进行分析、比对、计算或总结。
-
-**任务**: {task}
-
-**上下文信息**:
-- 目的地: {context.get('destination', '未知')}
-- 日期: {context.get('date', '未知')}
-- 天数: {context.get('days', '未知')}
-- 人数: {context.get('people', '未知')}
-- 预算: {context.get('budget', '未知')}
-
-**重要说明**：
-1. 这是一个总结任务，**不需要调用任何工具**
-2. 之前的查询任务已经获取了所需的酒店数据（共{len(previous_tool_results)}个结果）
-3. 你只需要基于这些数据进行分析、比对、推荐即可
-4. 直接用文字回答即可，无需调用工具
-
-请基于之前查询的酒店数据，完成总结任务。
-"""
+            return HOTEL_AGENT_SUMMARY_TASK_PROMPT.format(
+                task=task,
+                destination=context.get('destination', '未知'),
+                date=context.get('date', '未知'),
+                days=context.get('days', '未知'),
+                people=context.get('people', '未知'),
+                budget=context.get('budget', '未知'),
+                num_results=len(previous_tool_results)
+            )
         else:
-            # 查询任务
-            return f"""你是一个专门负责【酒店查询】的助手，擅长查询目的地的酒店住宿信息。
-
-**任务**: {task}
-
-**上下文信息**:
-- 目的地: {context.get('destination', '未知')}
-- 日期: {context.get('date', '未知')}
-- 天数: {context.get('days', '未知')}
-- 人数: {context.get('people', '未知')}
-- 预算: {context.get('budget', '未知')}
-
-**可用工具**:
-{tools_desc}
-
-请使用酒店查询工具完成任务。注意：
-1. 提供详细的酒店信息（位置、价格、评分、设施等）
-2. 考虑用户的预算和人数需求
-3. 推荐多个不同档次的酒店选项
-4. 提供酒店周边的交通和景点信息
-5. 考虑入住日期和天数计算总费用
-"""
+            return HOTEL_AGENT_QUERY_TASK_PROMPT.format(
+                task=task,
+                destination=context.get('destination', '未知'),
+                date=context.get('date', '未知'),
+                days=context.get('days', '未知'),
+                people=context.get('people', '未知'),
+                budget=context.get('budget', '未知'),
+                tools_desc=tools_desc
+            )
 
 
 # 子 Agent 工厂函数

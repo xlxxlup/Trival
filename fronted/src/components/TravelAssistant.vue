@@ -8,7 +8,7 @@ const form = reactive({
 	date: '',
 	days: 4,
 	budget: 5000,
-	preferences: '我要坐飞机往返。在规划时，不需要考虑任何价格问题、预算问题，只需要给出规划即可。',
+	preferences: '我要坐飞机往返。在规划时，始终都不需要考虑总的预算问题，只需要给出规划即可。',
 	people: 1
 })
 
@@ -309,6 +309,48 @@ function isOptionSelected(optionId) {
 							<div class="weather-desc">{{ day.weather_desc }}</div>
 							<div class="weather-temp" v-if="day.temperature_high && day.temperature_low">
 								{{ day.temperature_low }}°C ~ {{ day.temperature_high }}°C
+							</div>
+						</div>
+					</div>
+				</div>
+
+				<!-- 每日详细行程 -->
+				<div v-if="planResult.amusement_info.daily_itinerary && planResult.amusement_info.daily_itinerary.length > 0" class="info-card daily-itinerary-section">
+					<h4>📅 每日详细行程</h4>
+					<div class="daily-itinerary-list">
+						<div v-for="(dayPlan, idx) in planResult.amusement_info.daily_itinerary" :key="idx" class="daily-itinerary-item">
+							<div class="day-header">
+								<span class="day-number">第{{ dayPlan.day }}天</span>
+								<span class="day-date">{{ dayPlan.date }}</span>
+							</div>
+							<div class="day-content">
+								<div v-if="dayPlan.morning" class="time-slot">
+									<div class="time-label">🌅 上午</div>
+									<div class="time-content">{{ dayPlan.morning }}</div>
+								</div>
+								<div v-if="dayPlan.afternoon" class="time-slot">
+									<div class="time-label">☀️ 下午</div>
+									<div class="time-content">{{ dayPlan.afternoon }}</div>
+								</div>
+								<div v-if="dayPlan.evening" class="time-slot">
+									<div class="time-label">🌙 晚上</div>
+									<div class="time-content">{{ dayPlan.evening }}</div>
+								</div>
+								<div v-if="dayPlan.meals && dayPlan.meals.length > 0" class="meals-section">
+									<div class="meals-label">🍽️ 餐饮安排</div>
+									<ul class="meals-list">
+										<li v-for="(meal, mealIdx) in dayPlan.meals" :key="mealIdx">{{ meal }}</li>
+									</ul>
+								</div>
+								<div v-if="dayPlan.pois && dayPlan.pois.length > 0" class="day-pois">
+									<div class="pois-label">📍 涉及景点/POI</div>
+									<div class="pois-grid">
+										<div v-for="(poi, poiIdx) in dayPlan.pois" :key="poiIdx" class="day-poi-item">
+											<span class="poi-name-small">{{ poi.name }}</span>
+											<span v-if="poi.rating" class="poi-rating-small">⭐{{ poi.rating }}</span>
+										</div>
+									</div>
+								</div>
 							</div>
 						</div>
 					</div>
@@ -832,6 +874,148 @@ button:disabled {
 	color: #475569;
 	line-height: 1.6;
 	margin: 8px 0 0 0;
+}
+
+/* 每日详细行程样式 */
+.daily-itinerary-section {
+	background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+	border: 2px solid #0ea5e9;
+}
+
+.daily-itinerary-list {
+	display: grid;
+	gap: 16px;
+}
+
+.daily-itinerary-item {
+	background: white;
+	border-radius: 12px;
+	overflow: hidden;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+	border: 1px solid #e0f2fe;
+}
+
+.day-header {
+	background: linear-gradient(90deg, #0ea5e9 0%, #06b6d4 100%);
+	color: white;
+	padding: 12px 16px;
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+}
+
+.day-number {
+	font-size: 18px;
+	font-weight: bold;
+}
+
+.day-date {
+	font-size: 14px;
+	opacity: 0.95;
+}
+
+.day-content {
+	padding: 16px;
+}
+
+.time-slot {
+	margin-bottom: 14px;
+	padding: 12px;
+	background: #f8fafc;
+	border-radius: 8px;
+	border-left: 3px solid #0ea5e9;
+}
+
+.time-label {
+	font-size: 14px;
+	font-weight: 600;
+	color: #0369a1;
+	margin-bottom: 6px;
+}
+
+.time-content {
+	font-size: 14px;
+	color: #334155;
+	line-height: 1.6;
+}
+
+.meals-section {
+	margin-top: 12px;
+	padding: 12px;
+	background: #fef3c7;
+	border-radius: 8px;
+	border-left: 3px solid #f59e0b;
+}
+
+.meals-label {
+	font-size: 14px;
+	font-weight: 600;
+	color: #92400e;
+	margin-bottom: 8px;
+}
+
+.meals-list {
+	list-style: none;
+	padding: 0;
+	margin: 0;
+}
+
+.meals-list li {
+	font-size: 13px;
+	color: #78350f;
+	padding: 4px 0;
+	padding-left: 16px;
+	position: relative;
+}
+
+.meals-list li::before {
+	content: "•";
+	position: absolute;
+	left: 0;
+	color: #f59e0b;
+	font-weight: bold;
+}
+
+.day-pois {
+	margin-top: 12px;
+	padding: 12px;
+	background: #f0fdf4;
+	border-radius: 8px;
+	border-left: 3px solid #10b981;
+}
+
+.pois-label {
+	font-size: 14px;
+	font-weight: 600;
+	color: #065f46;
+	margin-bottom: 8px;
+}
+
+.pois-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+	gap: 8px;
+}
+
+.day-poi-item {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 8px;
+	background: white;
+	border-radius: 6px;
+	border: 1px solid #d1fae5;
+}
+
+.poi-name-small {
+	font-size: 13px;
+	color: #065f46;
+	font-weight: 500;
+}
+
+.poi-rating-small {
+	font-size: 11px;
+	color: #059669;
 }
 </style>
 

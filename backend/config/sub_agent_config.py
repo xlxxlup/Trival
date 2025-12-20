@@ -27,6 +27,11 @@ SUB_AGENT_MAX_ROUNDS = {
 # 默认最大轮次（当某个agent类型未在上面配置时使用）
 DEFAULT_MAX_ROUNDS = 3
 
+# Replan → Execute 补充循环的最大次数
+# 当Replan发现数据缺失时，会生成补充任务让Execute执行
+# 这个参数限制了这种补充循环的最大次数，避免无限循环
+MAX_REPLAN_SUPPLEMENT_ROUNDS = 2
+
 
 def get_max_rounds(agent_type: str) -> int:
     """

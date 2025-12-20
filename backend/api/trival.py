@@ -15,6 +15,47 @@ logger = logging.getLogger(__name__)
 # 使用JSON文件持久化会话存储
 SESSION_FILE = os.path.join(os.path.dirname(__file__), "..", "session_store.json")
 
+def normalize_intervention_options(intervention_request: dict) -> dict:
+    """
+    规范化人工介入请求中的options格式
+    将字符串数组转换为对象数组，确保前端能正确显示
+
+    Args:
+        intervention_request: 原始介入请求字典
+
+    Returns:
+        规范化后的介入请求字典
+    """
+    if not intervention_request or not isinstance(intervention_request, dict):
+        return intervention_request
+
+    # 检查options字段
+    options = intervention_request.get("options")
+    if options and isinstance(options, list) and len(options) > 0:
+        # 如果第一个元素是字符串，说明需要转换
+        if isinstance(options[0], str):
+            logger.info(f"检测到options为字符串数组，将转换为对象数组")
+            normalized_options = []
+            for idx, option_text in enumerate(options):
+                normalized_options.append({
+                    "id": f"option_{idx}",
+                    "text": option_text
+                })
+            intervention_request["options"] = normalized_options
+            logger.debug(f"已转换options: {normalized_options}")
+        elif isinstance(options[0], dict):
+            # 已经是对象数组，检查是否包含必需的字段
+            if "id" not in options[0] or "text" not in options[0]:
+                logger.warning(f"options对象缺少id或text字段，将尝试修复")
+                # 尝试修复
+                for idx, option in enumerate(options):
+                    if "id" not in option:
+                        option["id"] = f"option_{idx}"
+                    if "text" not in option and "label" in option:
+                        option["text"] = option["label"]
+
+    return intervention_request
+
 def load_session_store() -> Dict[str, dict]:
     """从文件加载会话存储"""
     if os.path.exists(SESSION_FILE):
@@ -215,6 +256,10 @@ async def travel(data: TrivalFormat):
         if final_state.get("need_intervention", False):
             logger.warning(f"⚠️  会话 {session_id} 需要人工介入")
             intervention_req = final_state.get("intervention_request", {})
+
+            # 规范化options格式
+            intervention_req = normalize_intervention_options(intervention_req)
+
             logger.info(f"介入阶段: {final_state.get('intervention_stage')}")
             logger.info(f"介入原因: {intervention_req.get('message', '未提供')}")
             logger.debug(f"完整介入请求: {intervention_req}")
@@ -223,7 +268,7 @@ async def travel(data: TrivalFormat):
                 session_id=session_id,
                 status="need_intervention",
                 need_intervention=True,
-                intervention_request=final_state.get("intervention_request")
+                intervention_request=intervention_req
             )
             logger.info(f"✓ 返回人工介入响应，等待用户通过/resume接口继续")
             logger.info("=" * 80)
@@ -250,7 +295,20 @@ async def travel(data: TrivalFormat):
                     # 新格式：合并overview和actionable_tasks
                     overview = plan_data.get('overview', [])
                     actionable_tasks = plan_data.get('actionable_tasks', [])
-                    plan_list = overview + actionable_tasks
+
+                    # 将actionable_tasks从TaskCategory格式转换为字符串列表
+                    task_strings = []
+                    if actionable_tasks and isinstance(actionable_tasks[0], dict) and 'tasks' in actionable_tasks[0]:
+                        # TaskCategory格式：提取每个分类中的tasks和summary_task
+                        for category in actionable_tasks:
+                            task_strings.extend(category.get('tasks', []))
+                            if category.get('summary_task'):
+                                task_strings.append(category['summary_task'])
+                    else:
+                        # 简单字符串列表格式
+                        task_strings = actionable_tasks
+
+                    plan_list = overview + task_strings
                     logger.debug(f"plan已转换为列表格式（新格式，长度={len(plan_list)}）")
                 else:
                     # 旧格式：直接使用
@@ -265,7 +323,20 @@ async def travel(data: TrivalFormat):
                     # 新格式：合并overview和actionable_tasks
                     overview = replan_data.get('overview', [])
                     actionable_tasks = replan_data.get('actionable_tasks', [])
-                    replan_list = overview + actionable_tasks
+
+                    # 将actionable_tasks从TaskCategory格式转换为字符串列表
+                    task_strings = []
+                    if actionable_tasks and isinstance(actionable_tasks[0], dict) and 'tasks' in actionable_tasks[0]:
+                        # TaskCategory格式：提取每个分类中的tasks和summary_task
+                        for category in actionable_tasks:
+                            task_strings.extend(category.get('tasks', []))
+                            if category.get('summary_task'):
+                                task_strings.append(category['summary_task'])
+                    else:
+                        # 简单字符串列表格式
+                        task_strings = actionable_tasks
+
+                    replan_list = overview + task_strings
                     logger.debug(f"replan已转换为列表格式（新格式，长度={len(replan_list)}）")
                 else:
                     # 旧格式：直接使用
@@ -357,6 +428,10 @@ async def resume_travel(data: InterventionResponseModel):
         if final_state.get("need_intervention", False):
             logger.warning(f"⚠️  会话 {session_id} 再次需要人工介入")
             intervention_req = final_state.get("intervention_request", {})
+
+            # 规范化options格式
+            intervention_req = normalize_intervention_options(intervention_req)
+
             logger.info(f"介入阶段: {final_state.get('intervention_stage')}")
             logger.info(f"介入原因: {intervention_req.get('message', '未提供')}")
             logger.debug(f"完整介入请求: {intervention_req}")
@@ -365,7 +440,7 @@ async def resume_travel(data: InterventionResponseModel):
                 session_id=session_id,
                 status="need_intervention",
                 need_intervention=True,
-                intervention_request=final_state.get("intervention_request")
+                intervention_request=intervention_req
             )
             logger.info(f"✓ 返回人工介入响应，等待用户再次通过/resume接口继续")
             logger.info("=" * 80)
@@ -392,7 +467,20 @@ async def resume_travel(data: InterventionResponseModel):
                     # 新格式：合并overview和actionable_tasks
                     overview = plan_data.get('overview', [])
                     actionable_tasks = plan_data.get('actionable_tasks', [])
-                    plan_list = overview + actionable_tasks
+
+                    # 将actionable_tasks从TaskCategory格式转换为字符串列表
+                    task_strings = []
+                    if actionable_tasks and isinstance(actionable_tasks[0], dict) and 'tasks' in actionable_tasks[0]:
+                        # TaskCategory格式：提取每个分类中的tasks和summary_task
+                        for category in actionable_tasks:
+                            task_strings.extend(category.get('tasks', []))
+                            if category.get('summary_task'):
+                                task_strings.append(category['summary_task'])
+                    else:
+                        # 简单字符串列表格式
+                        task_strings = actionable_tasks
+
+                    plan_list = overview + task_strings
                     logger.debug(f"plan已转换为列表格式（新格式，长度={len(plan_list)}）")
                 else:
                     # 旧格式：直接使用
@@ -407,7 +495,20 @@ async def resume_travel(data: InterventionResponseModel):
                     # 新格式：合并overview和actionable_tasks
                     overview = replan_data.get('overview', [])
                     actionable_tasks = replan_data.get('actionable_tasks', [])
-                    replan_list = overview + actionable_tasks
+
+                    # 将actionable_tasks从TaskCategory格式转换为字符串列表
+                    task_strings = []
+                    if actionable_tasks and isinstance(actionable_tasks[0], dict) and 'tasks' in actionable_tasks[0]:
+                        # TaskCategory格式：提取每个分类中的tasks和summary_task
+                        for category in actionable_tasks:
+                            task_strings.extend(category.get('tasks', []))
+                            if category.get('summary_task'):
+                                task_strings.append(category['summary_task'])
+                    else:
+                        # 简单字符串列表格式
+                        task_strings = actionable_tasks
+
+                    replan_list = overview + task_strings
                     logger.debug(f"replan已转换为列表格式（新格式，长度={len(replan_list)}）")
                 else:
                     # 旧格式：直接使用

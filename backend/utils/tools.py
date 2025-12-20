@@ -12,7 +12,7 @@ def zhipu_search(query: str, count: int = 5) -> str:
         query: 搜索查询关键词
         count: 返回结果的条数，范围1-50，默认5
     """
-    api_key = "644a19dba0604174a3c223da87678c24.5QSlMiDsjVwwLQiv"
+    api_key = os.getenv("ZHIPU_SEARCH")
     client = ZhipuAiClient(api_key=api_key)
 
     response = client.web_search.web_search(
