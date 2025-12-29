@@ -30,6 +30,15 @@ trival_mcp_config = {
       "url": os.getenv("MCP_WEATHER_URL"),
       "disabled_tools": []  # 禁用的工具列表
     },
+    "aigohotel-mcp": {
+      "url": "https://mcp.aigohotel.com/mcp",
+      "transport": "streamable_http",
+      "headers": {
+        "Authorization": "Bearer mcp_ecee5f9657464dfda5d3acb427417df3",
+        "Content-Type": "application/json"
+      },
+      "disabled_tools": []  # 禁用的工具列表
+    }
     # "fetch": {
     #     "transport": "stdio",
     #     "command": "uvx",
@@ -56,7 +65,8 @@ mcp_to_agent_mapping = {
     "variflight-mcp": "transport",  # 机票的所有工具 → 交通助手
     # "fetch": ["search", "transport"],  # mcp-server-fetch 工具（已禁用，使用 zhipu_search 替代）
     "mcp_tool": "weather",
-    "amap-maps": ["hotel","map"] # 高德地图的所有工具 → 酒店助手、地图助手
+    "amap-maps": ["map"], # 高德地图的所有工具 → 酒店助手、地图助手
+    "aigohotel-mcp":["hotel"]
     # 未来可以添加更多映射：
     # "tavily-search-mcp": "search",
     # "file-operations-mcp": "file",

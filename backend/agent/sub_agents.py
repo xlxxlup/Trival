@@ -50,7 +50,7 @@ class BaseSubAgent:
     async def initialize(self):
         """初始化 LLM 和工具绑定"""
         if self.llm is None:
-            self.llm = get_llm()
+            self.llm = get_llm("plan")
             self.llm_with_tools = self.llm.bind_tools(self.tools)
             logger.info(f"子Agent [{self.name}] 初始化完成，绑定工具数: {len(self.tools)}")
             for tool in self.tools:

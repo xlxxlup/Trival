@@ -53,11 +53,11 @@ class AmusementState(TypedDict):
     # Replan补充循环计数
     supplement_count: Annotated[int, Field(description="Replan补充执行的次数计数", default=0)]
 
-async def get_local_llm():
+async def get_local_llm(node):
     global _llm
     if _llm is None:
         # 只在第一次调用时执行
-        _llm = get_llm()
+        _llm = get_llm(node)
     return _llm
 
 async def compress_messages(messages: list[BaseMessage], max_messages: int = 15) -> list[BaseMessage]:
@@ -195,7 +195,7 @@ async def plan(state:AmusementState)->AmusementState:
             state["messages"].append(human_msg)
 
     logger.info("正在初始化LLM...")
-    llm = await get_local_llm()
+    llm = await get_local_llm("plan")
 
     # Plan阶段不需要绑定工具，只需要生成结构化的规划
     # 工具调用在execute阶段进行
@@ -443,7 +443,7 @@ async def excute(state :AmusementState)->AmusementState:
     logger.debug(f"子Agent列表:\n{sub_agents_info}")
 
     # 初始化父Agent的LLM（用于任务分发）
-    llm = await get_local_llm()
+    llm = await get_local_llm("execute")
 
     # 准备上下文信息
     context = {
@@ -775,7 +775,7 @@ async def replan(state:AmusementState)->AmusementState:
             state["messages"].append(human_msg)
 
     logger.info("正在初始化LLM...")
-    llm = await get_local_llm()
+    llm = await get_local_llm("replan")
 
     # Replan阶段不需要绑定工具，只需要生成结构化的规划和攻略
     # 工具调用在execute阶段已经完成
@@ -935,7 +935,7 @@ async def observation(state:AmusementState) -> Command[Literal["__end__", "plan"
     logger.info(f"出发地: {state['origin']}, 目的地: {state['destination']}, 预算: {state['budget']}")
 
     logger.info("正在初始化LLM...")
-    llm = await get_local_llm()
+    llm = await get_local_llm("observation")
 
     content = AMUSEMENT_SYSTEM_JUDGE_TEMPLATE.format(**state)
     human_message = HumanMessage(content=content)
