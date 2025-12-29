@@ -283,6 +283,61 @@ class ToolDataStorage:
 
         return stats
 
+    def find_cached_execution(
+        self,
+        category: str,
+        tool_name: str,
+        tool_input: Dict[str, Any],
+        require_exact_match: bool = False
+    ) -> Optional[Dict[str, Any]]:
+        """
+        查找是否有匹配的缓存工具执行结果
+
+        Args:
+            category: 任务类别（transport、hotel、weather等）
+            tool_name: 工具名称
+            tool_input: 工具输入参数
+            require_exact_match: 是否要求精确匹配（默认False，使用模糊匹配）
+
+        Returns:
+            Optional[Dict]: 如果找到匹配的缓存记录则返回，否则返回None
+        """
+        data = self._load_category_data(category)
+
+        # 按工具名称过滤
+        matching_records = [record for record in data if record.get("tool_name") == tool_name]
+
+        if not matching_records:
+            logger.debug(f"未找到工具 {tool_name} 的缓存记录（类别: {category}）")
+            return None
+
+        # 查找匹配的记录
+        if require_exact_match:
+            # 精确匹配：tool_input必须完全相同
+            for record in reversed(matching_records):  # 从最新的开始查找
+                if record.get("tool_input") == tool_input:
+                    logger.info(f"✅ 找到精确匹配的缓存记录: {category}/{tool_name}")
+                    return record
+        else:
+            # 模糊匹配：检查关键字段是否匹配
+            # 对于大多数工具，主要参数（如city、keywords、address等）相同即可认为是重复调用
+            for record in reversed(matching_records):  # 从最新的开始查找
+                cached_input = record.get("tool_input", {})
+
+                # 简单的匹配策略：所有非空参数都相同
+                # 过滤掉值为None或空字符串的参数进行比较
+                current_input_filtered = {k: v for k, v in tool_input.items() if v not in [None, "", []]}
+                cached_input_filtered = {k: v for k, v in cached_input.items() if v not in [None, "", []]}
+
+                if current_input_filtered == cached_input_filtered:
+                    logger.info(f"✅ 找到模糊匹配的缓存记录: {category}/{tool_name}")
+                    logger.debug(f"缓存输入: {cached_input}")
+                    logger.debug(f"当前输入: {tool_input}")
+                    return record
+
+        logger.debug(f"未找到匹配的缓存记录: {category}/{tool_name}")
+        return None
+
 
 # 全局单例实例
 _storage_instance: Optional[ToolDataStorage] = None

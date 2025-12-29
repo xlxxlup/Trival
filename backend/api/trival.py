@@ -4,7 +4,7 @@ import json
 import os
 from typing import Dict, Any
 from fastapi.routing import APIRouter
-from .model.trival_model import TrivalFormat, InterventionResponseModel, TravelResponse
+from .model.trival_model import TrivalFormat, InterventionResponseModel, TravelResponse, FeedbackRequestModel
 from agent.amusement_agent import get_graph
 from logging_config import setup_session_logging, cleanup_session_logging
 from langchain_core.messages import messages_to_dict, messages_from_dict, BaseMessage
@@ -534,6 +534,139 @@ async def resume_travel(data: InterventionResponseModel):
     except Exception as e:
         logger.error("=" * 80)
         logger.error(f"❌ 恢复会话时出错: {str(e)}")
+        logger.error(f"错误类型: {type(e).__name__}")
+        logger.exception("完整错误堆栈:")
+        logger.error("=" * 80)
+        raise
+
+@trival_route.post("/feedback", response_model=TravelResponse)
+async def submit_feedback(data: FeedbackRequestModel):
+    """
+    接收用户对已完成的旅游计划的反馈
+    根据反馈调整计划并返回新的结果
+    """
+    logger.info("=" * 80)
+    logger.info("【API /feedback】收到反馈调整请求")
+    logger.info(f"会话ID: {data.session_id}")
+    logger.info(f"用户反馈: {data.feedback}")
+
+    try:
+        session_id = data.session_id
+
+        # 获取会话状态
+        store = load_session_store()
+        if session_id not in store:
+            logger.error(f"❌ 会话 {session_id} 不存在或已过期")
+            logger.error(f"当前存储的会话ID列表: {list(store.keys())}")
+            raise ValueError(f"会话 {session_id} 不存在或已过期")
+
+        # 反序列化状态
+        state = deserialize_state(store[session_id])
+        logger.info(f"✓ 找到会话 {session_id}")
+
+        # 保存原始的旅游计划（用于合并）
+        original_amusement_info = state.get("amusement_info")
+        if original_amusement_info:
+            if hasattr(original_amusement_info, 'model_dump'):
+                state["original_amusement_info"] = original_amusement_info.model_dump()
+            elif hasattr(original_amusement_info, 'dict'):
+                state["original_amusement_info"] = original_amusement_info.dict()
+            elif isinstance(original_amusement_info, dict):
+                state["original_amusement_info"] = original_amusement_info
+            logger.info("✓ 已保存原始旅游计划")
+
+        # 设置反馈调整模式
+        state["is_feedback_mode"] = True
+        state["user_feedback"] = data.feedback
+        # 清空之前的规划结果，重新开始
+        state["plan"] = []
+        state["replan"] = []
+        state["messages"] = state.get("messages", [])[:-5] if len(state.get("messages", [])) > 5 else []  # 保留部分消息作为上下文
+        state["executed_tasks"] = []  # 清空已执行任务，允许重新执行
+
+        logger.info("✓ 已设置反馈调整模式")
+        logger.info(f"  - is_feedback_mode: True")
+        logger.info(f"  - user_feedback: {data.feedback}")
+        logger.info(f"  - 保留消息数: {len(state.get('messages', []))}")
+
+        # 获取graph
+        logger.info("正在获取工作流图...")
+        graph = await get_graph()
+
+        # 重新执行工作流（反馈调整模式）
+        logger.info("🚀 开始执行反馈调整流程...")
+        final_state = await graph.ainvoke(state)
+        logger.info("✅ 反馈调整执行完成")
+
+        # 更新会话状态
+        store = load_session_store()
+        store[session_id] = final_state
+        save_session_store(store)
+        logger.info(f"会话 {session_id} 状态已更新")
+
+        # 检查是否需要人工介入（反馈模式下不应该需要介入）
+        if final_state.get("need_intervention", False):
+            logger.warning(f"⚠️  反馈调整模式下出现人工介入请求")
+            intervention_req = final_state.get("intervention_request", {})
+            intervention_req = normalize_intervention_options(intervention_req)
+
+            response = TravelResponse(
+                session_id=session_id,
+                status="need_intervention",
+                need_intervention=True,
+                intervention_request=intervention_req
+            )
+            logger.info(f"返回人工介入响应")
+            logger.info("=" * 80)
+            return response
+        else:
+            logger.info(f"✓ 反馈调整完成")
+
+            # 转换amusement_info为dict
+            amusement_info_dict = None
+            if final_state.get("amusement_info"):
+                amusement_info = final_state["amusement_info"]
+                if hasattr(amusement_info, 'dict'):
+                    amusement_info_dict = amusement_info.dict()
+                elif hasattr(amusement_info, 'model_dump'):
+                    amusement_info_dict = amusement_info.model_dump()
+                elif isinstance(amusement_info, dict):
+                    amusement_info_dict = amusement_info
+
+            # 处理replan格式
+            replan_data = final_state.get('replan')
+            replan_list = None
+            if replan_data:
+                if isinstance(replan_data, dict):
+                    overview = replan_data.get('overview', [])
+                    actionable_tasks = replan_data.get('actionable_tasks', [])
+                    task_strings = []
+                    if actionable_tasks and isinstance(actionable_tasks[0], dict) and 'tasks' in actionable_tasks[0]:
+                        for category in actionable_tasks:
+                            task_strings.extend(category.get('tasks', []))
+                            if category.get('summary_task'):
+                                task_strings.append(category['summary_task'])
+                    else:
+                        task_strings = actionable_tasks
+                    replan_list = overview + task_strings
+                else:
+                    replan_list = replan_data
+
+            response = TravelResponse(
+                session_id=session_id,
+                status="completed",
+                need_intervention=False,
+                plan=None,  # 反馈模式下不返回plan
+                replan=replan_list,
+                amusement_info=amusement_info_dict
+            )
+            logger.info("✓ 返回调整后的旅游规划结果")
+            logger.info("=" * 80)
+            return response
+
+    except Exception as e:
+        logger.error("=" * 80)
+        logger.error(f"❌ 处理反馈时出错: {str(e)}")
         logger.error(f"错误类型: {type(e).__name__}")
         logger.exception("完整错误堆栈:")
         logger.error("=" * 80)

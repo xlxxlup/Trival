@@ -29,3 +29,8 @@ class TravelResponse(BaseModel):
     plan: Optional[List[str]] = Field(default=None, description="初始规划")
     replan: Optional[List[str]] = Field(default=None, description="优化后的规划")
     amusement_info: Optional[Dict[str, Any]] = Field(default=None, description="旅游攻略信息")
+
+class FeedbackRequestModel(BaseModel):
+    """用户对旅游计划的反馈请求"""
+    session_id: str = Field(description="会话ID")
+    feedback: str = Field(description="用户的反馈内容，例如：酒店太贵了，换个便宜点的")

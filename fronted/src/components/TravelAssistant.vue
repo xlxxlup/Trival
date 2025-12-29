@@ -1,6 +1,6 @@
 <script setup>
 import { reactive, ref } from 'vue'
-import { generateTravelPlan, resumeTravelPlan } from '../services/api'
+import { generateTravelPlan, resumeTravelPlan, submitFeedback } from '../services/api'
 
 const form = reactive({
 	origin:'沈阳',
@@ -24,6 +24,10 @@ const interventionResponse = reactive({
 	text_input: '',
 	selected_options: []
 })
+
+// 反馈调整相关状态
+const feedbackText = ref('')
+const feedbackLoading = ref(false)
 
 async function onSubmit() {
 	errorMessage.value = ''
@@ -84,6 +88,22 @@ async function onInterventionSubmit() {
 		errorMessage.value = err?.message || '请求失败'
 	} finally {
 		loading.value = false
+	}
+}
+
+async function onFeedbackSubmit() {
+	errorMessage.value = ''
+	feedbackLoading.value = true
+	try {
+		const data = await submitFeedback(sessionId.value, feedbackText.value)
+		// 清空反馈输入
+		feedbackText.value = ''
+		// 处理响应
+		handleResponse(data)
+	} catch (err) {
+		errorMessage.value = err?.message || '提交反馈失败'
+	} finally {
+		feedbackLoading.value = false
 	}
 }
 
@@ -432,6 +452,30 @@ function isOptionSelected(optionId) {
 					<ul class="tips-list">
 						<li v-for="(tip, idx) in planResult.amusement_info.tips" :key="idx">{{ tip }}</li>
 					</ul>
+				</div>
+			</div>
+
+			<!-- 反馈调整区域 -->
+			<div v-if="planResult && !needIntervention" class="feedback-section">
+				<div class="info-card feedback-card">
+					<h4>💬 对计划有想法？</h4>
+					<p class="feedback-hint">如果您对这个计划有任何想法或建议，请告诉我们，我们会根据您的反馈进行调整。</p>
+					<div class="feedback-input">
+						<textarea
+							v-model="feedbackText"
+							rows="3"
+							placeholder="例如：酒店太贵了，换个便宜点的；或者：这个景点不去，换成其他地方..."
+							class="feedback-textarea"
+						/>
+					</div>
+					<button
+						type="button"
+						@click="onFeedbackSubmit"
+						:disabled="feedbackLoading || !feedbackText.trim()"
+						class="feedback-button"
+					>
+						{{ feedbackLoading ? '调整中...' : '根据反馈调整计划' }}
+					</button>
 				</div>
 			</div>
 		</div>
@@ -1016,6 +1060,79 @@ button:disabled {
 .poi-rating-small {
 	font-size: 11px;
 	color: #059669;
+}
+
+/* 反馈调整区域样式 */
+.feedback-section {
+	margin-top: 24px;
+}
+
+.feedback-card {
+	background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+	border: 2px solid #f59e0b;
+}
+
+.feedback-card h4 {
+	color: #92400e;
+	border-bottom-color: #fbbf24;
+}
+
+.feedback-hint {
+	font-size: 14px;
+	color: #78350f;
+	margin-bottom: 16px;
+	line-height: 1.6;
+}
+
+.feedback-input {
+	margin-bottom: 16px;
+}
+
+.feedback-textarea {
+	width: 100%;
+	padding: 12px 14px;
+	border: 2px solid #fbbf24;
+	border-radius: 8px;
+	font-size: 14px;
+	font-family: inherit;
+	resize: vertical;
+	min-height: 80px;
+	transition: border-color 0.2s;
+}
+
+.feedback-textarea:focus {
+	outline: none;
+	border-color: #f59e0b;
+	box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.2);
+}
+
+.feedback-button {
+	width: 100%;
+	padding: 12px 14px;
+	background: linear-gradient(90deg, #f59e0b 0%, #d97706 100%);
+	color: white;
+	border: none;
+	border-radius: 8px;
+	font-size: 15px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: all 0.2s;
+}
+
+.feedback-button:hover:not(:disabled) {
+	background: linear-gradient(90deg, #d97706 0%, #b45309 100%);
+	transform: translateY(-1px);
+	box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
+}
+
+.feedback-button:active:not(:disabled) {
+	transform: translateY(0);
+}
+
+.feedback-button:disabled {
+	opacity: 0.6;
+	cursor: not-allowed;
+	transform: none;
 }
 </style>
 

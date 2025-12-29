@@ -183,7 +183,7 @@ class BaseSubAgent:
                 break
 
             # 执行工具
-            tool_messages = await execute_tool_calls(response, self.tools, logger)
+            tool_messages = await execute_tool_calls(response, self.tools, logger, category, storage)
 
             if not tool_messages:
                 logger.warning(f"  [{self.name}] 工具执行失败")
@@ -286,7 +286,7 @@ class BaseSubAgent:
                         break
 
                     # 执行工具
-                    tool_messages = await execute_tool_calls(response, self.tools, logger)
+                    tool_messages = await execute_tool_calls(response, self.tools, logger, category, storage)
 
                     if not tool_messages:
                         logger.warning(f"  [{self.name}] 额外第{extra_round}轮工具执行失败")

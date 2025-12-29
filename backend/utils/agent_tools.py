@@ -113,7 +113,13 @@ def get_llm(node):
     llm = ChatOpenAI(model_name=model,openai_api_key=api_key,openai_api_base=base_url,temperature=0)
     return llm
 
-async def execute_tool_calls(ai_message, tools: list, logger_instance=None) -> list:
+async def execute_tool_calls(
+    ai_message,
+    tools: list,
+    logger_instance=None,
+    category: str = None,
+    storage=None
+) -> list:
     """
     自定义工具调用函数，替代内置的ToolNode
 
@@ -121,6 +127,8 @@ async def execute_tool_calls(ai_message, tools: list, logger_instance=None) -> l
         ai_message: LLM返回的包含工具调用的消息
         tools: 可用工具列表
         logger_instance: 日志记录器实例
+        category: 任务类别（用于缓存查询）
+        storage: ToolDataStorage实例（用于缓存查询）
 
     Returns:
         包含ToolMessage的列表
@@ -133,6 +141,10 @@ async def execute_tool_calls(ai_message, tools: list, logger_instance=None) -> l
 
     # 创建工具名称到工具对象的映射
     tool_map = {tool.name: tool for tool in tools}
+
+    # 缓存统计
+    cache_hits = 0
+    cache_misses = 0
 
     # 兼容新旧版本的tool_calls格式
     tool_calls = []
@@ -179,16 +191,33 @@ async def execute_tool_calls(ai_message, tools: list, logger_instance=None) -> l
             )
             continue
 
+        # 检查缓存（如果提供了category和storage）
+        cached_result = None
+        if category and storage:
+            cached_result = storage.find_cached_execution(
+                category=category,
+                tool_name=tool_name,
+                tool_input=tool_args,
+                require_exact_match=False
+            )
+
         # 执行工具
         tool = tool_map[tool_name]
         try:
-            log.info(f"🔧 开始执行工具: {tool_name}")
-
-            # 调用工具（始终使用异步调用）
-            result = await tool.ainvoke(tool_args)
-
-            log.info(f"✅ 工具执行成功")
-            log.info(f"工具返回结果（前500字符）: {str(result)[:500]}")
+            if cached_result:
+                # 使用缓存结果
+                cache_hits += 1
+                result = cached_result.get("tool_output", "")
+                log.info(f"✅ 使用缓存结果（缓存命中）")
+                log.info(f"缓存时间戳: {cached_result.get('timestamp', '未知')}")
+                log.info(f"工具返回结果（前500字符）: {str(result)[:500]}")
+            else:
+                # 调用工具（始终使用异步调用）
+                cache_misses += 1
+                log.info(f"🔧 开始执行工具: {tool_name}")
+                result = await tool.ainvoke(tool_args)
+                log.info(f"✅ 工具执行成功")
+                log.info(f"工具返回结果（前500字符）: {str(result)[:500]}")
 
             # 创建ToolMessage
             tool_messages.append(
@@ -209,6 +238,17 @@ async def execute_tool_calls(ai_message, tools: list, logger_instance=None) -> l
                     name=tool_name
                 )
             )
+
+    # 缓存统计日志
+    if category and storage and (cache_hits > 0 or cache_misses > 0):
+        log.info(f"=" * 60)
+        log.info(f"缓存统计 - 类别: {category}")
+        log.info(f"  缓存命中: {cache_hits}")
+        log.info(f"  缓存未命中: {cache_misses}")
+        log.info(f"  总工具调用: {cache_hits + cache_misses}")
+        if cache_hits > 0:
+            log.info(f"  命中率: {cache_hits / (cache_hits + cache_misses) * 100:.1f}%")
+        log.info(f"=" * 60)
 
     log.info(f"=" * 60)
     log.info(f"所有工具执行完成，共执行 {len(tool_messages)} 个工具")

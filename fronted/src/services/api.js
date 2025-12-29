@@ -38,4 +38,24 @@ export async function resumeTravelPlan(sessionId, interventionResponse) {
 	return await response.json();
 }
 
+export async function submitFeedback(sessionId, feedback) {
+	const response = await fetch(`${API_BASE}/feedback`, {
+		method: 'POST',
+		headers: {
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({
+			session_id: sessionId,
+			feedback: feedback
+		})
+	});
+
+	if (!response.ok) {
+		const text = await response.text();
+		throw new Error(`Request failed: ${response.status} ${text}`);
+	}
+
+	return await response.json();
+}
+
 

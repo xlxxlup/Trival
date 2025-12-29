@@ -17,7 +17,7 @@ from utils import get_llm
 from utils.agent_tools import retry_llm_call
 from utils.mcp_manager import get_mcp_manager
 
-from prompts import AMUSEMENT_SYSTEM_PLAN_TEMPLATE,AMUSEMENT_SYSYRM_REPLAN_TEMPLATE,AMUSEMENT_SYSTEM_JUDGE_TEMPLATE,AMUSEMENT_SUMMARY_PROMPT,AMUSEMENT_COORDINATOR_TASK_DISPATCH_TEMPLATE
+from prompts import AMUSEMENT_SYSTEM_PLAN_TEMPLATE,AMUSEMENT_SYSYRM_REPLAN_TEMPLATE,AMUSEMENT_SYSTEM_JUDGE_TEMPLATE,AMUSEMENT_SUMMARY_PROMPT,AMUSEMENT_COORDINATOR_TASK_DISPATCH_TEMPLATE,AMUSEMENT_SYSTEM_PLAN_FEEDBACK_TEMPLATE,AMUSEMENT_SYSYRM_REPLAN_FEEDBACK_TEMPLATE
 from formatters import ReplanFormat,PlanFormat
 from formatters.amusement_format import AmusementFormat, PlanWithIntervention, ReplanWithIntervention, InterventionResponse
 
@@ -52,6 +52,10 @@ class AmusementState(TypedDict):
     observation_result: Annotated[dict, Field(description="Observation阶段的判断结果，包含缺失项和建议", default=None)]
     # Replan补充循环计数
     supplement_count: Annotated[int, Field(description="Replan补充执行的次数计数", default=0)]
+    # 反馈调整模式相关状态
+    is_feedback_mode: Annotated[bool, Field(description="是否处于反馈调整模式", default=False)]
+    user_feedback: Annotated[str, Field(description="用户的反馈建议", default="")]
+    original_amusement_info: Annotated[AmusementFormat, Field(description="原始完整旅游计划（反馈模式）", default=None)]
 
 async def get_local_llm(node):
     global _llm
@@ -155,6 +159,17 @@ async def compress_messages(messages: list[BaseMessage], max_messages: int = 15)
 async def plan(state:AmusementState)->AmusementState:
     logger.info("=" * 80)
     logger.info("【PLAN阶段开始】旅游智能体开始规划...")
+
+    # 检查是否处于反馈调整模式
+    is_feedback_mode = state.get("is_feedback_mode", False)
+    user_feedback = state.get("user_feedback", "")
+
+    if is_feedback_mode:
+        logger.info("🔄 【反馈调整模式】根据用户反馈生成调整任务...")
+        logger.info(f"用户反馈: {user_feedback}")
+    else:
+        logger.info("【正常规划模式】生成完整旅游规划...")
+
     logger.info(f"输入参数: 出发地={state['origin']}, 目的地={state['destination']}, 日期={state['date']}, 天数={state['days']}, 人数={state['people']}, 预算={state['budget']}")
     logger.debug(f"用户偏好: {state['preferences']}")
     logger.info(f"当前人工介入次数: {state.get('intervention_count', 0)}")
@@ -204,84 +219,123 @@ async def plan(state:AmusementState)->AmusementState:
     # 使用PlanWithIntervention格式，让LLM自主判断是否需要人工介入
     parser = JsonOutputParser(pydantic_object = PlanWithIntervention)
 
-    # 格式化已询问的问题列表，清晰展示给LLM
-    if collected_info.get("asked_questions"):
-        qa_list = []
-        for idx, qa in enumerate(collected_info["asked_questions"], 1):
-            answer = qa.get("answer", "【尚未回答】")
-            qa_list.append(f"{idx}. 问题: {qa['question']}\n   回答: {answer}")
-        collected_info_str = "已询问的问题和回答：\n" + "\n".join(qa_list)
-        logger.debug(f"已格式化 {len(collected_info['asked_questions'])} 个问题传递给LLM")
-    else:
-        collected_info_str = "尚未询问任何问题"
+    # 根据模式选择不同的 prompt 和输入变量
+    if is_feedback_mode:
+        # 反馈调整模式：使用专用的 prompt
+        logger.info("使用反馈调整模式的 Prompt")
 
-    # 格式化observation反馈（如果有）
-    observation_result = state.get("observation_result")
-    if observation_result and not observation_result.get("satisfied", True):
-        observation_feedback = "**上一轮执行存在以下问题：**\n\n"
-
-        # 处理新旧两种格式
-        if "missing_categories" in observation_result:
-            # 新格式：按类别分组
-            observation_feedback += "缺失的任务类别：\n"
-            for category in observation_result.get("missing_categories", []):
-                category_name = category.get("category", "unknown")
-                observation_feedback += f"\n**类别: {category_name}**\n"
-                observation_feedback += "缺失信息：\n"
-                for item in category.get("missing_items", []):
-                    observation_feedback += f"- {item}\n"
-                observation_feedback += "需要执行的任务：\n"
-                for task in category.get("tasks", []):
-                    observation_feedback += f"- {task}\n"
-            observation_feedback += "\n**重要**：请只补充上述缺失的类别，不要重复已完成的任务类别。"
+        # 获取原始计划概要
+        original_amusement_info = state.get("original_amusement_info")
+        if original_amusement_info:
+            original_plan_summary = f"""
+目的地: {original_amusement_info.get('destination', 'N/A')}
+行程概述: {original_amusement_info.get('summary', 'N/A')}
+行程亮点: {', '.join(original_amusement_info.get('highlights', []))}
+每日行程: {len(original_amusement_info.get('daily_itinerary', []))}天
+"""
         else:
-            # 旧格式：兼容处理
-            observation_feedback += "缺失项：\n"
-            for item in observation_result.get("missing_items", []):
-                observation_feedback += f"- {item}\n"
-            observation_feedback += "\n建议：\n"
-            for suggestion in observation_result.get("suggestions", []):
-                observation_feedback += f"- {suggestion}\n"
+            original_plan_summary = "无原始计划信息"
 
-        logger.info("检测到observation反馈，将传递给LLM进行增量规划")
-        logger.debug(f"Observation反馈内容: {observation_feedback}")
+        prompt = PromptTemplate(
+            template = AMUSEMENT_SYSTEM_PLAN_FEEDBACK_TEMPLATE,
+            input_variables=["user_feedback", "original_plan_summary"],
+            partial_variables={"json_format": parser.get_format_instructions()}
+        )
+
+        # 使用智能消息压缩（反馈模式下需要更少的历史消息）
+        logger.info("开始压缩消息历史（反馈模式）...")
+        recent_messages = await compress_messages(state.get("messages", []), max_messages=5)
+        logger.info(f"消息压缩完成，最终消息数: {len(recent_messages)}")
+
+        input_data = {
+            "user_feedback": user_feedback,
+            "original_plan_summary": original_plan_summary
+        }
+
     else:
-        observation_feedback = "无（首次规划或上一轮已完成）"
+        # 正常模式：使用标准的 prompt
+        logger.info("使用正常规划模式的 Prompt")
 
-    prompt = PromptTemplate(
+        # 格式化已询问的问题列表，清晰展示给LLM
+        if collected_info.get("asked_questions"):
+            qa_list = []
+            for idx, qa in enumerate(collected_info["asked_questions"], 1):
+                answer = qa.get("answer", "【尚未回答】")
+                qa_list.append(f"{idx}. 问题: {qa['question']}\n   回答: {answer}")
+            collected_info_str = "已询问的问题和回答：\n" + "\n".join(qa_list)
+            logger.debug(f"已格式化 {len(collected_info['asked_questions'])} 个问题传递给LLM")
+        else:
+            collected_info_str = "尚未询问任何问题"
+
+        # 格式化observation反馈（如果有）
+        observation_result = state.get("observation_result")
+        if observation_result and not observation_result.get("satisfied", True):
+            observation_feedback = "**上一轮执行存在以下问题：**\n\n"
+
+            # 处理新旧两种格式
+            if "missing_categories" in observation_result:
+                # 新格式：按类别分组
+                observation_feedback += "缺失的任务类别：\n"
+                for category in observation_result.get("missing_categories", []):
+                    category_name = category.get("category", "unknown")
+                    observation_feedback += f"\n**类别: {category_name}**\n"
+                    observation_feedback += "缺失信息：\n"
+                    for item in category.get("missing_items", []):
+                        observation_feedback += f"- {item}\n"
+                    observation_feedback += "需要执行的任务：\n"
+                    for task in category.get("tasks", []):
+                        observation_feedback += f"- {task}\n"
+                observation_feedback += "\n**重要**：请只补充上述缺失的类别，不要重复已完成的任务类别。"
+            else:
+                # 旧格式：兼容处理
+                observation_feedback += "缺失项：\n"
+                for item in observation_result.get("missing_items", []):
+                    observation_feedback += f"- {item}\n"
+                observation_feedback += "\n建议：\n"
+                for suggestion in observation_result.get("suggestions", []):
+                    observation_feedback += f"- {suggestion}\n"
+
+            logger.info("检测到observation反馈，将传递给LLM进行增量规划")
+            logger.debug(f"Observation反馈内容: {observation_feedback}")
+        else:
+            observation_feedback = "无（首次规划或上一轮已完成）"
+
+        prompt = PromptTemplate(
             template = AMUSEMENT_SYSTEM_PLAN_TEMPLATE,
             input_variables=["origin","destination","date","days","people","budget","preferences","plan","replan","collected_info","observation_feedback","messages"],
             partial_variables={"json_format":parser.get_format_instructions()},
-    )
+        )
+
+        # 使用智能消息压缩，避免丢失重要信息
+        logger.info("开始压缩消息历史...")
+        recent_messages = await compress_messages(state.get("messages", []), max_messages=15)
+        logger.info(f"消息压缩完成，最终消息数: {len(recent_messages)}")
+
+        input_data = {
+            "origin": state["origin"],
+            "destination": state["destination"],
+            "date": state["date"],
+            "days": state["days"],
+            "people": state["people"],
+            "budget": state["budget"],
+            "preferences": state["preferences"],
+            "plan": state.get("plan", []),
+            "replan": state.get("replan", []),
+            "collected_info": collected_info_str,
+            "observation_feedback": observation_feedback,
+            "messages": recent_messages
+        }
+
     chain = prompt | llm | parser
 
-    # 使用智能消息压缩，避免丢失重要信息
-    logger.info("开始压缩消息历史...")
-    recent_messages = await compress_messages(state.get("messages", []), max_messages=15)
-    logger.info(f"消息压缩完成，最终消息数: {len(recent_messages)}")
-
-    input_data = {
-        "origin": state["origin"],
-        "destination": state["destination"],
-        "date": state["date"],
-        "days": state["days"],
-        "people": state["people"],
-        "budget": state["budget"],
-        "preferences": state["preferences"],
-        "plan": state.get("plan", []),
-        "replan": state.get("replan", []),
-        "collected_info": collected_info_str,
-        "observation_feedback": observation_feedback,
-        "messages": recent_messages
-    }
-
     logger.info("🤖 开始调用LLM生成规划...")
-    logger.debug(f"Prompt模板变量: origin={state['origin']}, destination={state['destination']}, budget={state['budget']}")
+    if not is_feedback_mode:
+        logger.debug(f"Prompt模板变量: origin={state['origin']}, destination={state['destination']}, budget={state['budget']}")
 
-    # 【新增】记录完整的输入信息到日志
+    # 记录完整的输入信息到日志
     formatted_prompt = prompt.format(**input_data)
     logger.debug("=" * 80)
-    logger.debug("【LLM输入信息 - Plan阶段】")
+    logger.debug(f"【LLM输入信息 - Plan阶段 ({'反馈模式' if is_feedback_mode else '正常模式'})】")
     logger.debug(f"完整Prompt:\n{formatted_prompt}")
     logger.debug("=" * 80)
 
@@ -327,29 +381,40 @@ async def plan(state:AmusementState)->AmusementState:
     logger.info(f"生成的可执行任务数: {len(actionable_tasks)}")
     logger.info(f"概述内容: {overview}")
     logger.info(f"可执行任务: {actionable_tasks}")
-    logger.info(f"是否需要人工介入: {response.get('need_intervention', False)}")
-    logger.info(f"人工介入请求: {response.get('intervention_request', None)}")
-    # 如果需要人工介入，记录问题（不限制次数，让LLM自己判断）
-    intervention_count = state.get("intervention_count", 0)
-    if response.get('need_intervention', False):
-        intervention_count += 1
-        intervention_req = response.get('intervention_request')
-        logger.warning(f"⚠️  LLM判断需要人工介入（第{intervention_count}次）")
-        logger.info(f"介入原因: {intervention_req.get('message') if intervention_req else '未提供'}")
-        logger.debug(f"完整介入请求: {json.dumps(intervention_req, ensure_ascii=False, indent=2) if intervention_req else 'None'}")
 
-        # 将这个问题记录到asked_questions中
-        if intervention_req:
-            new_question = {
-                "question": intervention_req.get('message', ''),
-                "question_type": intervention_req.get('question_type', ''),
-                "stage": "plan",
-                "answer": None  # 尚未回答
-            }
-            collected_info["asked_questions"].append(new_question)
-            logger.info(f"✓ 已记录新问题到历史，当前总问题数: {len(collected_info['asked_questions'])}")
+    # 反馈模式下不进行人工介入
+    if is_feedback_mode:
+        logger.info("反馈模式下跳过人工介入逻辑")
+        need_intervention = False
+        intervention_request = None
+        intervention_count = state.get("intervention_count", 0)
     else:
-        logger.info("✓ 不需要人工介入，流程将继续")
+        logger.info(f"是否需要人工介入: {response.get('need_intervention', False)}")
+        logger.info(f"人工介入请求: {response.get('intervention_request', None)}")
+
+        # 如果需要人工介入，记录问题（不限制次数，让LLM自己判断）
+        need_intervention = response.get('need_intervention', False)
+        intervention_count = state.get("intervention_count", 0)
+        intervention_request = response.get('intervention_request')
+
+        if need_intervention:
+            intervention_count += 1
+            logger.warning(f"⚠️  LLM判断需要人工介入（第{intervention_count}次）")
+            logger.info(f"介入原因: {intervention_request.get('message') if intervention_request else '未提供'}")
+            logger.debug(f"完整介入请求: {json.dumps(intervention_request, ensure_ascii=False, indent=2) if intervention_request else 'None'}")
+
+            # 将这个问题记录到asked_questions中
+            if intervention_request:
+                new_question = {
+                    "question": intervention_request.get('message', ''),
+                    "question_type": intervention_request.get('question_type', ''),
+                    "stage": "plan",
+                    "answer": None  # 尚未回答
+                }
+                collected_info["asked_questions"].append(new_question)
+                logger.info(f"✓ 已记录新问题到历史，当前总问题数: {len(collected_info['asked_questions'])}")
+        else:
+            logger.info("✓ 不需要人工介入，流程将继续")
 
     # 重置人工介入状态，保留collected_info
     result = {
@@ -357,9 +422,9 @@ async def plan(state:AmusementState)->AmusementState:
             "overview": overview,
             "actionable_tasks": actionable_tasks
         },
-        "need_intervention": response.get('need_intervention', False),
-        "intervention_request": response.get('intervention_request'),
-        "intervention_stage": "plan" if response.get('need_intervention', False) else "",
+        "need_intervention": need_intervention,
+        "intervention_request": intervention_request,
+        "intervention_stage": "plan" if need_intervention else "",
         "intervention_response": None,
         "intervention_count": intervention_count,
         "collected_info": collected_info,  # 保留已收集信息（包含问题历史）
@@ -373,7 +438,12 @@ async def plan(state:AmusementState)->AmusementState:
 
 async def excute(state :AmusementState)->AmusementState:
     logger.info("=" * 80)
-    logger.info("【EXECUTE阶段开始 - 多Agent系统】父Agent协调子Agent按类别执行任务...")
+    # 检查是否处于反馈调整模式
+    is_feedback_mode = state.get("is_feedback_mode", False)
+    if is_feedback_mode:
+        logger.info("【EXECUTE阶段开始 - 多Agent系统（反馈调整模式）】父Agent协调子Agent按类别执行调整任务...")
+    else:
+        logger.info("【EXECUTE阶段开始 - 多Agent系统】父Agent协调子Agent按类别执行任务...")
 
     # 从state中获取plan数据，兼容新旧格式
     plan_data = state.get("plan", [])
@@ -715,7 +785,17 @@ async def _execute_single_task(
 
 async def replan(state:AmusementState)->AmusementState:
     logger.info("=" * 80)
-    logger.info("【REPLAN阶段开始】旅游智能体重新规划并生成旅游攻略...")
+
+    # 检查是否处于反馈调整模式
+    is_feedback_mode = state.get("is_feedback_mode", False)
+    user_feedback = state.get("user_feedback", "")
+
+    if is_feedback_mode:
+        logger.info("【REPLAN阶段开始 - 反馈调整模式】根据用户反馈调整旅游攻略...")
+        logger.info(f"用户反馈: {user_feedback}")
+    else:
+        logger.info("【REPLAN阶段开始】旅游智能体重新规划并生成旅游攻略...")
+
     logger.info(f"输入参数: 目的地={state['destination']}, 天数={state['days']}, 预算={state['budget']}, 人数={state['people']}")
 
     # 处理plan格式（新旧兼容）
@@ -784,49 +864,89 @@ async def replan(state:AmusementState)->AmusementState:
     # 使用ReplanWithIntervention格式，让LLM自主判断是否需要人工介入
     parser = JsonOutputParser(pydantic_object = ReplanWithIntervention)
 
-    # 格式化已询问的问题列表，清晰展示给LLM
-    if collected_info.get("asked_questions"):
-        qa_list = []
-        for idx, qa in enumerate(collected_info["asked_questions"], 1):
-            answer = qa.get("answer", "【尚未回答】")
-            qa_list.append(f"{idx}. 问题: {qa['question']}\n   回答: {answer}")
-        collected_info_str = "已询问的问题和回答：\n" + "\n".join(qa_list)
-        logger.debug(f"已格式化 {len(collected_info['asked_questions'])} 个问题传递给LLM")
-    else:
-        collected_info_str = "尚未询问任何问题"
+    # 根据模式选择不同的 prompt 和输入变量
+    if is_feedback_mode:
+        # 反馈调整模式：使用专用的 prompt
+        logger.info("使用反馈调整模式的 Prompt")
 
-    prompt = PromptTemplate(
+        # 获取原始完整计划
+        original_amusement_info = state.get("original_amusement_info", {})
+        original_amusement_info_str = json.dumps(original_amusement_info, ensure_ascii=False, indent=2)
+
+        prompt = PromptTemplate(
+            template = AMUSEMENT_SYSYRM_REPLAN_FEEDBACK_TEMPLATE,
+            input_variables=["user_feedback", "original_amusement_info", "origin", "destination", "date", "days", "people", "budget", "preferences", "messages", "plan"],
+            partial_variables={"json_format": parser.get_format_instructions()}
+        )
+
+        # 使用智能消息压缩（反馈模式下需要更少的历史消息，但保留工具调用结果）
+        logger.info("开始压缩消息历史（反馈模式）...")
+        recent_messages = await compress_messages(state.get("messages", []), max_messages=10)
+        logger.info(f"消息压缩完成，最终消息数: {len(recent_messages)}")
+
+        input_data = {
+            "user_feedback": user_feedback,
+            "original_amusement_info": original_amusement_info_str,
+            "origin": state["origin"],
+            "destination": state["destination"],
+            "date": state["date"],
+            "days": state["days"],
+            "people": state["people"],
+            "budget": state["budget"],
+            "preferences": state["preferences"],
+            "messages": recent_messages,
+            "plan": plan_for_display
+        }
+
+    else:
+        # 正常模式：使用标准的 prompt
+        logger.info("使用正常规划模式的 Prompt")
+
+        # 格式化已询问的问题列表，清晰展示给LLM
+        if collected_info.get("asked_questions"):
+            qa_list = []
+            for idx, qa in enumerate(collected_info["asked_questions"], 1):
+                answer = qa.get("answer", "【尚未回答】")
+                qa_list.append(f"{idx}. 问题: {qa['question']}\n   回答: {answer}")
+            collected_info_str = "已询问的问题和回答：\n" + "\n".join(qa_list)
+            logger.debug(f"已格式化 {len(collected_info['asked_questions'])} 个问题传递给LLM")
+        else:
+            collected_info_str = "尚未询问任何问题"
+
+        prompt = PromptTemplate(
             template = AMUSEMENT_SYSYRM_REPLAN_TEMPLATE,
             input_variables=["origin","destination","date","days","people","budget","preferences","messages","plan","collected_info"],
             partial_variables={"json_format":parser.get_format_instructions()}
-    )
+        )
+
+        # 使用智能消息压缩，避免丢失重要信息（特别是工具调用结果）
+        logger.info("开始压缩消息历史...")
+        recent_messages = await compress_messages(state.get("messages", []), max_messages=15)
+        logger.info(f"消息压缩完成，最终消息数: {len(recent_messages)}")
+
+        input_data = {
+            "origin": state["origin"],
+            "destination": state["destination"],
+            "date": state["date"],
+            "days": state["days"],
+            "people": state["people"],
+            "budget": state["budget"],
+            "preferences": state["preferences"],
+            "messages": recent_messages,
+            "plan": plan_for_display,  # 使用兼容格式的plan
+            "collected_info": collected_info_str
+        }
+
     chain = prompt | llm | parser
 
-    # 使用智能消息压缩，避免丢失重要信息（特别是工具调用结果）
-    logger.info("开始压缩消息历史...")
-    recent_messages = await compress_messages(state.get("messages", []), max_messages=15)
-    logger.info(f"消息压缩完成，最终消息数: {len(recent_messages)}")
-
-    input_data = {
-        "origin": state["origin"],
-        "destination": state["destination"],
-        "date": state["date"],
-        "days": state["days"],
-        "people": state["people"],
-        "budget": state["budget"],
-        "preferences": state["preferences"],
-        "messages": recent_messages,
-        "plan": plan_for_display,  # 使用兼容格式的plan
-        "collected_info": collected_info_str
-    }
-
     logger.info("🤖 开始调用LLM生成优化后的规划和攻略...")
-    logger.debug(f"Prompt模板变量: destination={state['destination']}, budget={state['budget']}")
+    if not is_feedback_mode:
+        logger.debug(f"Prompt模板变量: destination={state['destination']}, budget={state['budget']}")
 
-    # 【新增】记录完整的输入信息到日志
+    # 记录完整的输入信息到日志
     formatted_prompt = prompt.format(**input_data)
     logger.debug("=" * 80)
-    logger.debug("【LLM输入信息 - Replan阶段】")
+    logger.debug(f"【LLM输入信息 - Replan阶段 ({'反馈模式' if is_feedback_mode else '正常模式'})】")
     logger.debug(f"完整Prompt:\n{formatted_prompt}")
     logger.debug("=" * 80)
 
@@ -840,26 +960,39 @@ async def replan(state:AmusementState)->AmusementState:
     # 如果重试后仍失败，提供默认响应
     if response is None or not isinstance(response, dict):
         logger.error(f"Replan阶段LLM调用失败（重试后仍失败），响应: {response}")
-        logger.warning("将请求人工介入以获取更多信息")
-        response = {
-            "replan": state.get("plan", []),  # 使用原规划
-            "amusement_info": {
-                "destination": state.get("destination", ""),
-                "summary": "由于系统错误，暂无详细攻略信息。",
-                "highlights": [],
-                "local_tips": [],
-                "transportation": {},
-                "budget_breakdown": {}
-            },
-            "need_intervention": True,
-            "intervention_request": {
-                "message": "系统在优化规划时遇到问题，请确认您的具体需求或偏好。",
-                "question_type": "confirmation",
-                "options": ["继续当前规划", "重新规划", "提供更多信息"],
-                "allow_text_input": True
+        logger.warning("将使用默认响应")
+
+        if is_feedback_mode:
+            # 反馈模式：返回原始计划
+            response = {
+                "replan": ["由于系统错误，返回原始旅游计划"],
+                "amusement_info": state.get("original_amusement_info", {}),
+                "need_intervention": False,
+                "intervention_request": None,
+                "need_supplement": False,
+                "supplement_tasks": []
             }
-        }
-        logger.info("已生成默认的人工介入请求")
+        else:
+            # 正常模式：请求人工介入
+            response = {
+                "replan": state.get("plan", []),  # 使用原规划
+                "amusement_info": {
+                    "destination": state.get("destination", ""),
+                    "summary": "由于系统错误，暂无详细攻略信息。",
+                    "highlights": [],
+                    "local_tips": [],
+                    "transportation": {},
+                    "budget_breakdown": {}
+                },
+                "need_intervention": True,
+                "intervention_request": {
+                    "message": "系统在优化规划时遇到问题，请确认您的具体需求或偏好。",
+                    "question_type": "confirmation",
+                    "options": ["继续当前规划", "重新规划", "提供更多信息"],
+                    "allow_text_input": True
+                }
+            }
+        logger.info("已生成默认响应")
 
     logger.info("✅ LLM响应完成")
     replan = response["replan"]
@@ -868,7 +1001,6 @@ async def replan(state:AmusementState)->AmusementState:
     logger.info(f"优化规划内容: {replan}")
     logger.info(f"旅游攻略信息已生成")
     logger.debug(f"攻略详情: {amusement_info}")
-    logger.info(f"是否需要人工介入: {response.get('need_intervention', False)}")
 
     # 【新增】从replan响应中获取补充任务信息
     need_supplement = response.get('need_supplement', False)
@@ -885,38 +1017,49 @@ async def replan(state:AmusementState)->AmusementState:
     else:
         logger.info("✓ 所有基本信息已完整，无需补充执行")
 
-    # 如果需要人工介入，记录问题（不限制次数，让LLM自己判断）
-    intervention_count = state.get("intervention_count", 0)
-    if response.get('need_intervention', False):
-        intervention_count += 1
-        intervention_req = response.get('intervention_request')
-        logger.warning(f"⚠️  LLM判断需要人工介入（第{intervention_count}次）")
-        logger.info(f"介入原因: {intervention_req.get('message') if intervention_req else '未提供'}")
-        logger.debug(f"完整介入请求: {json.dumps(intervention_req, ensure_ascii=False, indent=2) if intervention_req else 'None'}")
-
-        # 将这个问题记录到asked_questions中
-        if intervention_req:
-            new_question = {
-                "question": intervention_req.get('message', ''),
-                "question_type": intervention_req.get('question_type', ''),
-                "stage": "replan",
-                "answer": None  # 尚未回答
-            }
-            collected_info["asked_questions"].append(new_question)
-            logger.info(f"✓ 已记录新问题到历史，当前总问题数: {len(collected_info['asked_questions'])}")
+    # 反馈模式下不进行人工介入
+    if is_feedback_mode:
+        logger.info("反馈模式下跳过人工介入逻辑")
+        need_intervention = False
+        intervention_request = None
+        intervention_count = state.get("intervention_count", 0)
+        # 反馈模式下也不需要补充执行
+        need_supplement = False
+        supplement_tasks = []
     else:
-        logger.info("✓ 不需要人工介入，流程将继续")
+        logger.info(f"是否需要人工介入: {response.get('need_intervention', False)}")
 
-    # 【修改】直接使用从LLM响应中获取的补充任务信息
-    # need_supplement 和 supplement_tasks 已在上面从response中提取
+        # 如果需要人工介入，记录问题（不限制次数，让LLM自己判断）
+        need_intervention = response.get('need_intervention', False)
+        intervention_count = state.get("intervention_count", 0)
+        intervention_request = response.get('intervention_request')
+
+        if need_intervention:
+            intervention_count += 1
+            logger.warning(f"⚠️  LLM判断需要人工介入（第{intervention_count}次）")
+            logger.info(f"介入原因: {intervention_request.get('message') if intervention_request else '未提供'}")
+            logger.debug(f"完整介入请求: {json.dumps(intervention_request, ensure_ascii=False, indent=2) if intervention_request else 'None'}")
+
+            # 将这个问题记录到asked_questions中
+            if intervention_request:
+                new_question = {
+                    "question": intervention_request.get('message', ''),
+                    "question_type": intervention_request.get('question_type', ''),
+                    "stage": "replan",
+                    "answer": None  # 尚未回答
+                }
+                collected_info["asked_questions"].append(new_question)
+                logger.info(f"✓ 已记录新问题到历史，当前总问题数: {len(collected_info['asked_questions'])}")
+        else:
+            logger.info("✓ 不需要人工介入，流程将继续")
 
     # 重置人工介入状态，保留collected_info，添加补充任务相关字段
     result = {
         "replan": replan,
         "amusement_info": amusement_info,
-        "need_intervention": response.get('need_intervention', False),
-        "intervention_request": response.get('intervention_request'),
-        "intervention_stage": "replan" if response.get('need_intervention', False) else "",
+        "need_intervention": need_intervention,
+        "intervention_request": intervention_request,
+        "intervention_stage": "replan" if need_intervention else "",
         "intervention_response": None,
         "intervention_count": intervention_count,
         "collected_info": collected_info,  # 保留已收集信息（包含问题历史）
