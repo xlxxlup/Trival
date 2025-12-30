@@ -879,9 +879,9 @@ async def replan(state:AmusementState)->AmusementState:
             partial_variables={"json_format": parser.get_format_instructions()}
         )
 
-        # 使用智能消息压缩（反馈模式下需要更少的历史消息，但保留工具调用结果）
+        # 使用智能消息压缩（反馈模式下需要保留更多历史信息以便LLM理解完整上下文）
         logger.info("开始压缩消息历史（反馈模式）...")
-        recent_messages = await compress_messages(state.get("messages", []), max_messages=10)
+        recent_messages = await compress_messages(state.get("messages", []), max_messages=20)
         logger.info(f"消息压缩完成，最终消息数: {len(recent_messages)}")
 
         input_data = {
@@ -1001,6 +1001,83 @@ async def replan(state:AmusementState)->AmusementState:
     logger.info(f"优化规划内容: {replan}")
     logger.info(f"旅游攻略信息已生成")
     logger.debug(f"攻略详情: {amusement_info}")
+
+    # 【反馈模式数据合并】确保保留原始信息
+    if is_feedback_mode:
+        logger.info("🔄 反馈调整模式：开始合并原始信息和调整后的信息...")
+        original_info = state.get("original_amusement_info", {})
+
+        # 创建合并后的信息（深拷贝原始信息作为基础）
+        import copy
+        merged_info = copy.deepcopy(original_info)
+
+        # 定义关键字段的合并策略
+        # 对于这些字段，优先使用原始信息，除非LLM明确返回了更详细的内容
+        preserve_if_llm_empty = [
+            'weather', 'attractions', 'restaurants', 'bars_nightlife',
+            'shopping', 'tips', 'emergency_contacts', 'local_tips'
+        ]
+
+        # 需要深度合并的复杂字段（而不是直接替换）
+        deep_merge_fields = ['transportation', 'accommodation']
+
+        # 只更新LLM返回的非空字段
+        if amusement_info:
+            for key, value in amusement_info.items():
+                # 检查是否应该更新此字段
+                should_update = False
+
+                if value is None or value == "" or value == [] or value == {}:
+                    # 空值，跳过
+                    logger.debug(f"  跳过空字段: {key}")
+                    continue
+
+                # 对于需要深度合并的字段
+                if key in deep_merge_fields and isinstance(value, dict):
+                    original_value = original_info.get(key, {})
+                    if isinstance(original_value, dict):
+                        # 深度合并：只更新有值的子字段
+                        merged_field = copy.deepcopy(original_value)
+                        for sub_key, sub_value in value.items():
+                            if sub_value is not None and sub_value != "" and sub_value != [] and sub_value != {}:
+                                merged_field[sub_key] = sub_value
+                                logger.debug(f"  ✓ 更新 {key}.{sub_key}")
+                        merged_info[key] = merged_field
+                        continue
+
+                # 对于特殊字段，进行更智能的判断
+                elif key in preserve_if_llm_empty:
+                    # 比较内容丰富程度
+                    original_value = original_info.get(key, [])
+                    if isinstance(value, list) and isinstance(original_value, list):
+                        if len(value) < len(original_value):
+                            logger.debug(f"  保留原始{key}（LLM返回内容较少: {len(value)} < {len(original_value)}）")
+                            continue
+                        should_update = True
+                    elif isinstance(value, dict) and isinstance(original_value, dict):
+                        if len(value) < len(original_value):
+                            logger.debug(f"  保留原始{key}（LLM返回内容较少: {len(value)} < {len(original_value)}）")
+                            continue
+                        should_update = True
+                    else:
+                        should_update = True
+                else:
+                    # 其他字段直接更新
+                    should_update = True
+
+                if should_update:
+                    merged_info[key] = value
+                    logger.debug(f"  ✓ 更新字段: {key}")
+
+        # 记录合并结果
+        logger.info(f"✅ 数据合并完成")
+        logger.info(f"  原始信息字段数: {len(original_info)}")
+        logger.info(f"  LLM返回字段数: {len(amusement_info) if amusement_info else 0}")
+        logger.info(f"  合并后字段数: {len(merged_info)}")
+
+        # 使用合并后的信息
+        amusement_info = merged_info
+        logger.debug(f"合并后攻略详情（字段列表）: {list(amusement_info.keys())}")
 
     # 【新增】从replan响应中获取补充任务信息
     need_supplement = response.get('need_supplement', False)
