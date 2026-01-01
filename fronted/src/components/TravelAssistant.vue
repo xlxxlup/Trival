@@ -230,14 +230,6 @@ function isOptionSelected(optionId) {
 		<div v-if="planResult && !needIntervention" class="result">
 			<h2>生成结果</h2>
 
-			<!-- 规划列表 -->
-			<div v-if="planResult.replan" class="result-section">
-				<h3>📋 旅游规划</h3>
-				<ul>
-					<li v-for="(item, index) in planResult.replan" :key="index">{{ item }}</li>
-				</ul>
-			</div>
-
 			<!-- 旅游攻略信息 - 友好展示 -->
 			<div v-if="planResult.amusement_info" class="result-section">
 				<h3>✈️ 详细攻略</h3>
@@ -487,18 +479,42 @@ function isOptionSelected(optionId) {
 	max-width: 860px;
 	margin: 0 auto;
 	padding: 24px 16px;
+	background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+	min-height: 100vh;
+	border-radius: 0;
 }
 
 .assistant h1 {
-	font-size: 24px;
-	margin-bottom: 16px;
+	font-size: 28px;
+	margin-bottom: 20px;
+	color: white;
+	text-align: center;
+	text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2);
+	font-weight: 700;
+	letter-spacing: 1px;
 }
 
 .assistant-form {
 	display: grid;
 	grid-template-columns: 1fr;
-	gap: 12px;
-	margin-bottom: 16px;
+	gap: 14px;
+	margin-bottom: 20px;
+	background: white;
+	border-radius: 16px;
+	padding: 28px;
+	box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+	animation: slideIn 0.4s ease-out;
+}
+
+@keyframes slideIn {
+	from {
+		opacity: 0;
+		transform: translateY(-20px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
 }
 
 .field {
@@ -508,7 +524,10 @@ function isOptionSelected(optionId) {
 
 label {
 	font-weight: 600;
-	margin-bottom: 6px;
+	margin-bottom: 8px;
+	color: #374151;
+	font-size: 14px;
+	transition: color 0.2s;
 }
 
 input, textarea, button {
@@ -516,51 +535,98 @@ input, textarea, button {
 }
 
 input, textarea {
-	padding: 10px 12px;
-	border: 1px solid #e5e7eb;
-	border-radius: 8px;
+	padding: 12px 14px;
+	border: 2px solid #e5e7eb;
+	border-radius: 10px;
 	outline: none;
+	transition: all 0.3s ease;
+	background: #f9fafb;
+}
+
+input:focus, textarea:focus {
+	border-color: #667eea;
+	background: white;
+	box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+}
+
+input:hover, textarea:hover {
+	border-color: #a5b4fc;
 }
 
 button {
-	padding: 10px 14px;
-	border: 1px solid #6366f1;
-	background: #6366f1;
+	padding: 12px 20px;
+	border: none;
+	background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 	color: white;
-	border-radius: 8px;
+	border-radius: 10px;
 	cursor: pointer;
+	font-weight: 600;
+	font-size: 15px;
+	transition: all 0.3s ease;
+	box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+button:hover:not(:disabled) {
+	transform: translateY(-2px);
+	box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+}
+
+button:active:not(:disabled) {
+	transform: translateY(0);
+	box-shadow: 0 2px 8px rgba(102, 126, 234, 0.3);
 }
 
 button:disabled {
-	opacity: .7;
+	opacity: 0.6;
 	cursor: not-allowed;
+	transform: none;
 }
 
 .error {
 	color: #ef4444;
-	margin: 8px 0;
+	margin: 12px 0;
+	background: #fef2f2;
+	padding: 14px 18px;
+	border-radius: 10px;
+	border-left: 4px solid #ef4444;
+	font-weight: 500;
+	box-shadow: 0 2px 8px rgba(239, 68, 68, 0.15);
+	animation: shake 0.4s ease-in-out;
+}
+
+@keyframes shake {
+	0%, 100% { transform: translateX(0); }
+	25% { transform: translateX(-5px); }
+	75% { transform: translateX(5px); }
 }
 
 /* 人工介入样式 */
 .intervention-panel {
-	background: #f8fafc;
-	border: 2px solid #6366f1;
-	border-radius: 12px;
-	padding: 20px;
-	margin-bottom: 16px;
+	background: linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%);
+	border: 2px solid #667eea;
+	border-radius: 16px;
+	padding: 24px;
+	margin-bottom: 20px;
+	box-shadow: 0 8px 24px rgba(102, 126, 234, 0.15);
+	animation: slideIn 0.4s ease-out;
 }
 
 .intervention-panel h2 {
-	color: #6366f1;
-	margin-bottom: 12px;
-	font-size: 18px;
+	color: #667eea;
+	margin-bottom: 14px;
+	font-size: 20px;
+	font-weight: 700;
 }
 
 .intervention-message {
 	font-size: 16px;
 	color: #334155;
-	margin-bottom: 16px;
-	line-height: 1.5;
+	margin-bottom: 18px;
+	line-height: 1.6;
+	background: rgba(102, 126, 234, 0.08);
+	padding: 14px 16px;
+	border-radius: 8px;
+	border-left: 4px solid #667eea;
 }
 
 .current-plan {
@@ -599,22 +665,26 @@ button:disabled {
 .option-item {
 	display: flex;
 	align-items: center;
-	padding: 12px 16px;
+	padding: 14px 18px;
 	background: white;
 	border: 2px solid #e2e8f0;
-	border-radius: 8px;
-	margin-bottom: 8px;
+	border-radius: 10px;
+	margin-bottom: 10px;
 	cursor: pointer;
-	transition: all 0.2s;
+	transition: all 0.3s ease;
+	box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .option-item:hover {
-	border-color: #6366f1;
+	border-color: #667eea;
+	transform: translateX(4px);
+	box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
 }
 
 .option-item.selected {
-	border-color: #6366f1;
-	background: #eef2ff;
+	border-color: #667eea;
+	background: linear-gradient(135deg, #eef2ff 0%, #e0e7ff 100%);
+	box-shadow: 0 4px 12px rgba(102, 126, 234, 0.2);
 }
 
 .option-indicator {
@@ -647,14 +717,31 @@ button:disabled {
 /* 结果展示样式 */
 .result {
 	margin-top: 24px;
+	background: white;
+	border-radius: 16px;
+	padding: 28px;
+	box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+	animation: fadeIn 0.5s ease-out;
+}
+
+@keyframes fadeIn {
+	from {
+		opacity: 0;
+		transform: translateY(20px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
 }
 
 .result h2 {
-	font-size: 22px;
-	color: #1e293b;
-	margin-bottom: 20px;
-	border-bottom: 2px solid #6366f1;
-	padding-bottom: 8px;
+	font-size: 24px;
+	color: #667eea;
+	margin-bottom: 24px;
+	border-bottom: 3px solid #667eea;
+	padding-bottom: 10px;
+	font-weight: 700;
 }
 
 .result-section {
@@ -662,12 +749,13 @@ button:disabled {
 }
 
 .result-section h3 {
-	font-size: 18px;
-	color: #334155;
-	margin-bottom: 16px;
+	font-size: 19px;
+	color: #667eea;
+	margin-bottom: 18px;
 	display: flex;
 	align-items: center;
 	gap: 8px;
+	font-weight: 700;
 }
 
 .result-section > ul {
@@ -687,22 +775,29 @@ button:disabled {
 /* 信息卡片样式 */
 .info-card {
 	background: #ffffff;
-	border: 1px solid #e2e8f0;
-	border-radius: 12px;
-	padding: 20px;
-	margin-bottom: 16px;
-	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+	border: 2px solid #e2e8f0;
+	border-radius: 14px;
+	padding: 22px;
+	margin-bottom: 18px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+	transition: all 0.3s ease;
+}
+
+.info-card:hover {
+	box-shadow: 0 6px 20px rgba(102, 126, 234, 0.12);
+	border-color: #c7d2fe;
 }
 
 .info-card h4 {
-	font-size: 16px;
-	color: #1e293b;
-	margin-bottom: 16px;
+	font-size: 17px;
+	color: #667eea;
+	margin-bottom: 18px;
 	display: flex;
 	align-items: center;
 	gap: 8px;
-	border-bottom: 1px solid #e2e8f0;
-	padding-bottom: 8px;
+	border-bottom: 2px solid #e0e7ff;
+	padding-bottom: 10px;
+	font-weight: 700;
 }
 
 .info-card h5 {
@@ -740,18 +835,25 @@ button:disabled {
 
 .train-item {
 	display: flex;
-	gap: 12px;
-	padding: 12px;
-	background: #f8fafc;
-	border-radius: 8px;
-	border: 1px solid #e2e8f0;
+	gap: 14px;
+	padding: 14px;
+	background: linear-gradient(135deg, #f8fafc 0%, #f0f9ff 100%);
+	border-radius: 10px;
+	border: 2px solid #e2e8f0;
+	transition: all 0.3s ease;
+}
+
+.train-item:hover {
+	border-color: #667eea;
+	box-shadow: 0 4px 12px rgba(102, 126, 234, 0.15);
+	transform: translateY(-2px);
 }
 
 .train-no {
-	font-size: 18px;
+	font-size: 19px;
 	font-weight: bold;
-	color: #6366f1;
-	min-width: 80px;
+	color: #667eea;
+	min-width: 90px;
 }
 
 .train-details {
@@ -768,17 +870,24 @@ button:disabled {
 }
 
 .hotel-item {
-	padding: 14px;
-	background: #f8fafc;
-	border-radius: 8px;
-	border: 1px solid #e2e8f0;
+	padding: 16px;
+	background: linear-gradient(135deg, #fff7ed 0%, #fef3c7 100%);
+	border-radius: 10px;
+	border: 2px solid #fde68a;
+	transition: all 0.3s ease;
+}
+
+.hotel-item:hover {
+	box-shadow: 0 6px 16px rgba(251, 191, 36, 0.2);
+	transform: translateY(-2px);
+	border-color: #fbbf24;
 }
 
 .hotel-name {
-	font-size: 16px;
-	font-weight: 600;
-	color: #1e293b;
-	margin-bottom: 8px;
+	font-size: 17px;
+	font-weight: 700;
+	color: #78350f;
+	margin-bottom: 10px;
 }
 
 .hotel-details {
@@ -802,18 +911,25 @@ button:disabled {
 }
 
 .weather-item {
-	padding: 12px;
-	background: #f0f9ff;
-	border-radius: 8px;
+	padding: 14px;
+	background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
+	border-radius: 10px;
 	text-align: center;
-	border: 1px solid #bae6fd;
+	border: 2px solid #bae6fd;
+	transition: all 0.3s ease;
+}
+
+.weather-item:hover {
+	transform: translateY(-3px);
+	box-shadow: 0 6px 16px rgba(14, 165, 233, 0.25);
+	border-color: #0ea5e9;
 }
 
 .weather-date {
-	font-size: 13px;
+	font-size: 14px;
 	color: #0369a1;
-	margin-bottom: 6px;
-	font-weight: 600;
+	margin-bottom: 8px;
+	font-weight: 700;
 }
 
 .weather-desc {
@@ -834,17 +950,24 @@ button:disabled {
 }
 
 .poi-item {
-	padding: 14px;
-	background: #fef3c7;
-	border-radius: 8px;
-	border: 1px solid #fde047;
+	padding: 16px;
+	background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+	border-radius: 10px;
+	border: 2px solid #fde047;
+	transition: all 0.3s ease;
+}
+
+.poi-item:hover {
+	box-shadow: 0 6px 16px rgba(251, 191, 36, 0.25);
+	transform: translateY(-2px);
+	border-color: #fbbf24;
 }
 
 .poi-name {
-	font-size: 15px;
-	font-weight: 600;
+	font-size: 16px;
+	font-weight: 700;
 	color: #78350f;
-	margin-bottom: 6px;
+	margin-bottom: 8px;
 }
 
 .poi-rating, .poi-cost, .poi-hours {
@@ -875,18 +998,27 @@ button:disabled {
 .budget-item {
 	display: flex;
 	justify-content: space-between;
-	padding: 10px 14px;
-	background: #f0fdf4;
-	border-radius: 6px;
+	padding: 12px 16px;
+	background: linear-gradient(135deg, #f0fdf4 0%, #dcfce7 100%);
+	border-radius: 8px;
 	font-size: 14px;
 	color: #166534;
+	border: 2px solid #bbf7d0;
+	transition: all 0.3s ease;
+	font-weight: 600;
+}
+
+.budget-item:hover {
+	box-shadow: 0 4px 12px rgba(34, 197, 94, 0.2);
+	transform: translateX(4px);
 }
 
 .budget-item.total {
-	background: #dcfce7;
-	font-weight: bold;
-	font-size: 16px;
-	border: 2px solid #22c55e;
+	background: linear-gradient(135deg, #dcfce7 0%, #bbf7d0 100%);
+	font-weight: 800;
+	font-size: 17px;
+	border: 3px solid #22c55e;
+	box-shadow: 0 4px 16px rgba(34, 197, 94, 0.25);
 }
 
 /* 贴士列表 */
@@ -897,14 +1029,21 @@ button:disabled {
 }
 
 .tips-list li {
-	padding: 10px 14px;
-	margin-bottom: 8px;
-	background: #fef2f2;
-	border-left: 3px solid #ef4444;
-	border-radius: 4px;
+	padding: 12px 16px;
+	margin-bottom: 10px;
+	background: linear-gradient(135deg, #fef2f2 0%, #fee2e2 100%);
+	border-left: 4px solid #ef4444;
+	border-radius: 8px;
 	color: #991b1b;
 	font-size: 14px;
 	line-height: 1.6;
+	font-weight: 500;
+	transition: all 0.3s ease;
+}
+
+.tips-list li:hover {
+	box-shadow: 0 4px 12px rgba(239, 68, 68, 0.2);
+	transform: translateX(4px);
 }
 
 .local-transport {
@@ -912,18 +1051,21 @@ button:disabled {
 }
 
 .local-transport p {
-	padding: 12px;
-	background: #f1f5f9;
-	border-radius: 6px;
+	padding: 14px 16px;
+	background: linear-gradient(135deg, #f1f5f9 0%, #e2e8f0 100%);
+	border-radius: 10px;
 	color: #475569;
 	line-height: 1.6;
-	margin: 8px 0 0 0;
+	margin: 10px 0 0 0;
+	border: 2px solid #cbd5e1;
+	font-weight: 500;
 }
 
 /* 每日详细行程样式 */
 .daily-itinerary-section {
 	background: linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%);
-	border: 2px solid #0ea5e9;
+	border: 3px solid #0ea5e9;
+	box-shadow: 0 8px 24px rgba(14, 165, 233, 0.2);
 }
 
 .daily-itinerary-list {
@@ -933,41 +1075,54 @@ button:disabled {
 
 .daily-itinerary-item {
 	background: white;
-	border-radius: 12px;
+	border-radius: 14px;
 	overflow: hidden;
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-	border: 1px solid #e0f2fe;
+	box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+	border: 2px solid #e0f2fe;
+	transition: all 0.3s ease;
+}
+
+.daily-itinerary-item:hover {
+	box-shadow: 0 6px 24px rgba(14, 165, 233, 0.2);
+	transform: translateY(-2px);
 }
 
 .day-header {
 	background: linear-gradient(90deg, #0ea5e9 0%, #06b6d4 100%);
 	color: white;
-	padding: 12px 16px;
+	padding: 14px 18px;
 	display: flex;
 	justify-content: space-between;
 	align-items: center;
 }
 
 .day-number {
-	font-size: 18px;
-	font-weight: bold;
+	font-size: 19px;
+	font-weight: 800;
+	letter-spacing: 0.5px;
 }
 
 .day-date {
-	font-size: 14px;
+	font-size: 15px;
 	opacity: 0.95;
+	font-weight: 500;
 }
 
 .day-content {
-	padding: 16px;
+	padding: 18px;
 }
 
 .time-slot {
-	margin-bottom: 14px;
-	padding: 12px;
-	background: #f8fafc;
-	border-radius: 8px;
-	border-left: 3px solid #0ea5e9;
+	margin-bottom: 16px;
+	padding: 14px;
+	background: linear-gradient(135deg, #f8fafc 0%, #f0f9ff 100%);
+	border-radius: 10px;
+	border-left: 4px solid #0ea5e9;
+	transition: all 0.3s ease;
+}
+
+.time-slot:hover {
+	box-shadow: 0 4px 12px rgba(14, 165, 233, 0.15);
 }
 
 .time-label {

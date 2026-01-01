@@ -22,7 +22,7 @@ trival_mcp_config = {
     "variflight-mcp": {
       "transport": "sse",
       "url": os.getenv("MCP_VARIFLIGHT_URL"),
-      "disabled_tools": ["flightHappinessIndex"]  # 禁用的工具列表
+      "disabled_tools": ["flightHappinessIndex","searchFlightsByNumber"]  # 禁用的工具列表
     },
     # 天气查询 MCP - 专门的天气服务
     "mcp_tool": {

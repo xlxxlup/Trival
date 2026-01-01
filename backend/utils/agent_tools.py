@@ -109,7 +109,7 @@ def get_llm(node):
     api_key = os.getenv("MODEL_API_KEY")
     base_url = os.getenv("MODEL_BASE_URL")
     if(node=="replan"):
-        model = "gemini-3-flash-preview"
+        model = "gpt-4.1"
     llm = ChatOpenAI(model_name=model,openai_api_key=api_key,openai_api_base=base_url,temperature=0)
     return llm
 
