@@ -23,7 +23,7 @@ from formatters.amusement_format import AmusementFormat, PlanWithIntervention, R
 
 # 使用agent专用的logger
 logger = logging.getLogger("agent.amusement")
-_llm = None
+_llm_cache = {}  # 按节点名称缓存LLM实例
 
 class AmusementState(TypedDict):
     origin: Annotated[str, Field(description="出发地")]
@@ -58,11 +58,11 @@ class AmusementState(TypedDict):
     original_amusement_info: Annotated[AmusementFormat, Field(description="原始完整旅游计划（反馈模式）", default=None)]
 
 async def get_local_llm(node):
-    global _llm
-    if _llm is None:
-        # 只在第一次调用时执行
-        _llm = get_llm(node)
-    return _llm
+    global _llm_cache
+    if node not in _llm_cache:
+        # 按节点分别缓存
+        _llm_cache[node] = get_llm(node)
+    return _llm_cache[node]
 
 async def compress_messages(messages: list[BaseMessage], max_messages: int = 15) -> list[BaseMessage]:
     """
