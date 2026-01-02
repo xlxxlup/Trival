@@ -1,6 +1,6 @@
 from zai import ZhipuAiClient
 
-client = ZhipuAiClient(api_key="644a19dba0604174a3c223da87678c24.5QSlMiDsjVwwLQiv")
+client = ZhipuAiClient(api_key="###")
 
 response = client.web_search.web_search(
    search_engine="Search-Std",

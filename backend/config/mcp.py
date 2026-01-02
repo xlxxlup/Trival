@@ -34,7 +34,7 @@ trival_mcp_config = {
       "url": "https://mcp.aigohotel.com/mcp",
       "transport": "streamable_http",
       "headers": {
-        "Authorization": "Bearer mcp_ecee5f9657464dfda5d3acb427417df3",
+        "Authorization": os.getenv("AIGOHOTEL-MCP-KEY"),
         "Content-Type": "application/json"
       },
       "disabled_tools": []  # 禁用的工具列表

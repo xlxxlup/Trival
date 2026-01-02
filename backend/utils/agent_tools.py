@@ -35,7 +35,7 @@ async def retry_llm_call(
     """
     # 如果未提供fallback_model，使用默认列表
     if fallback_model is None:
-        fallback_model = ["gemini-3-flash-preview", "gemini-2.5-flash-preview-09-2025-thinking-*"]
+        fallback_model = ["gpt-4.1"]
 
     consecutive_429_errors = 0  # 连续429错误计数  貌似是因为token太长了
     current_fallback_index = -1  # 当前使用的后备模型索引，-1表示未降级
@@ -108,7 +108,7 @@ def get_llm(node):
     model = os.getenv("MODEL_NAME")
     api_key = os.getenv("MODEL_API_KEY")
     base_url = os.getenv("MODEL_BASE_URL")
-    if(node=="replan"):
+    if(node=="replan"): # replan阶段需要使用上下文更长的模型，防止因上下文过长导致模型调用失败
         model = "gpt-4.1"
     llm = ChatOpenAI(model_name=model,openai_api_key=api_key,openai_api_base=base_url,temperature=0)
     return llm

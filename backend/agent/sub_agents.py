@@ -939,8 +939,8 @@ async def create_sub_agents(
     # 将本地工具（如 zhipu_search）添加到搜索助手和交通助手（作为fallback）
     if local_tools:
         tools_by_agent_type['search'].extend(local_tools)
-        tools_by_agent_type['transport'].extend(local_tools)
-        logger.info(f"✓ 添加 {len(local_tools)} 个本地工具 → search 助手 和 transport 助手（作为fallback）")
+        # tools_by_agent_type['transport'].extend(local_tools) 交通助手这里最好不要添加搜索工具，只能使用专业的mcp去获取信息，否则可能会出现获取的信息过时等问题
+        logger.info(f"✓ 添加 {len(local_tools)} 个本地工具 → search 助手（作为fallback）")
 
     # 创建子 Agent
     sub_agents = {}

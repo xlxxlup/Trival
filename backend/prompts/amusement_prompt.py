@@ -372,6 +372,17 @@ SYSYRM_REPLAN_TEMPLATE = """
    - 提取住宿信息（酒店名称、位置、价格、评分）
    - 提取市内交通信息（地铁、公交、机场接驳等）
 
+   **【重要】酒店价格处理说明**：
+   - 如果使用 find-hotels 工具返回的数据：
+     - 工具参数：`stayNights` 表示入住晚数
+     - 工具返回的 `Price` 是 **stayNights 晚的总价格**，不是单晚价格
+     - **必须计算单晚价格**：单晚价格 = Price ÷ stayNights
+     - 在填充 `amusement_info.accommodation.price_per_night` 时使用计算后的单晚价格
+   - 示例：
+     - 工具返回：Price=1533, stayNights=3
+     - 计算单晚价格：1533 ÷ 3 = 511元/晚
+     - 填入 price_per_night："511" 或 "511元"
+
 2. **生成完整的每日行程**：
    - **必须生成{days}天的完整行程**，每天包括：
      - 日期（例如：2025-12-20，第1天）
@@ -1607,6 +1618,17 @@ SYSYRM_REPLAN_FEEDBACK_TEMPLATE = """
 2. **整合Execute阶段的新数据**：
    - 提取Execute阶段查询到的新数据（针对用户反馈调整的部分）
    - 用新数据替换原始计划中对应的部分
+
+   **【重要】酒店价格处理说明**：
+   - 如果使用 find-hotels 工具返回的数据：
+     - 工具参数：`stayNights` 表示入住晚数
+     - 工具返回的 `Price` 是 **stayNights 晚的总价格**，不是单晚价格
+     - **必须计算单晚价格**：单晚价格 = Price ÷ stayNights
+     - 在填充 `accommodation.price_per_night` 时使用计算后的单晚价格
+   - 示例：
+     - 工具返回：Price=1533, stayNights=3
+     - 计算单晚价格：1533 ÷ 3 = 511元/晚
+     - 填入 price_per_night："511" 或 "511元"
 
 3. **生成完整的调整后攻略**：
    - 合并原始计划（未调整部分）+ 新数据（调整部分）

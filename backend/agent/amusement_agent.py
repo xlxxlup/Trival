@@ -115,12 +115,11 @@ async def compress_messages(messages: list[BaseMessage], max_messages: int = 15)
 
     # 使用LLM总结旧消息
     try:
-        llm = await get_local_llm()
+        llm = await get_local_llm("plan")
 
         # 构建总结prompt
         old_messages_text = "\n\n".join([
-            f"[{type(msg).__name__}] {msg.content[:500]}"
-            for msg in old_other
+            f"[{type(msg).__name__}] {msg.content[:500]}" for msg in old_other
         ])
         prompt = AMUSEMENT_SUMMARY_PROMPT.format(old_messages=old_messages_text)
 
@@ -267,7 +266,7 @@ async def plan(state:AmusementState)->AmusementState:
         else:
             collected_info_str = "尚未询问任何问题"
 
-        # 格式化observation反馈（如果有）
+        # 格式化observation反馈（如果有，暂时已弃用）
         observation_result = state.get("observation_result")
         if observation_result and not observation_result.get("satisfied", True):
             observation_feedback = "**上一轮执行存在以下问题：**\n\n"
@@ -1495,7 +1494,6 @@ async def get_graph() -> StateGraph:
     logger.info("=" * 80)
     logger.info("【GET_GRAPH】开始构建Agent工作流图...")
 
-    # 注意：现在工具调用在excute节点内部完成，不再需要单独的tool_node
     logger.info("工作流采用新的execute内部多轮工具调用机制 + replan→execute补充循环")
 
     builder = StateGraph(state_schema = AmusementState)
