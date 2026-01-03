@@ -53,21 +53,49 @@ Trival 是一个基于 **LangGraph** 构建的智能旅游规划助手，采用 
 
 ### 2. 多 Agent 协同系统
 
+**VSCode 用户提示**：如果下面的 Mermaid 图表未渲染，请安装 [Mermaid Preview 插件](https://marketplace.visualstudio.com/items?itemName=bierner.markdown-mermaid) 或 [Markdown Preview Mermaid Support 插件](https://marketplace.visualstudio.com/items?itemName=bierner.markdown-mermaid)
+
+```mermaid
+flowchart TD
+    %% 父 Agent
+    PARENT[🤖 父 Agent<br/>协调者 & 任务分发]
+
+    %% 子 Agents
+    TRANSPORT[🚄 交通助手<br/>火车票 & 机票查询]
+    MAP[🗺️ 地图助手<br/>景点 & 路线规划]
+    WEATHER[🌤️ 天气助手<br/>天气预报查询]
+    HOTEL[🏨 酒店助手<br/>酒店搜索 & 价格]
+    SEARCH[🔍 搜索助手<br/>互联网信息检索]
+    FILE[📁 文件助手<br/>文件读写操作]
+
+    %% 连接关系
+    PARENT ==> TRANSPORT
+    PARENT ==> MAP
+    PARENT ==> WEATHER
+    PARENT ==> HOTEL
+    PARENT ==> SEARCH
+    PARENT ==> FILE
+
+
+    %% 样式
+    classDef parentStyle fill:#ff6b6b,stroke:#c92a2a,stroke-width:3px,color:#fff
+    classDef agentStyle fill:#4ecdc4,stroke:#0f9d58,stroke-width:2px,color:#fff
+
+    class PARENT parentStyle
+    class TRANSPORT,MAP,WEATHER,HOTEL,SEARCH,FILE agentStyle
 ```
-┌─────────────────────────────────────────────┐
-│              父 Agent (协调者)                │
-│         - 任务分析与分发                      │
-│         - 结果整合与总结                      │
-└──────────────┬──────────────────────────────┘
-               │
-       ┌───────┴───────┬──────────┬──────────┐
-       ▼               ▼          ▼          ▼
-  ┌─────────┐    ┌─────────┐ ┌─────────┐ ┌─────────┐
-  │交通助手  │    │地图助手  │ │天气助手  │ │酒店助手  │
-  │- 火车票  │    │- 景点   │ │- 天气   │ │- 酒店   │
-  │- 机票    │    │- 路线   │ │- 气温   │ │- 价格   │
-  └─────────┘    └─────────┘ └─────────┘ └─────────┘
-```
+
+**Agent 职责说明**：
+
+| Agent | 功能描述 | 绑定的 MCP 工具 |
+|-------|---------|----------------|
+| **父 Agent** | 任务分析、分发、结果整合 | 无（仅协调） |
+| **交通助手** | 12306 火车票、机票查询 | 12306-mcp, variflight-mcp |
+| **地图助手** | POI 搜索、路线规划 | amap-maps |
+| **天气助手** | 天气预报、气温查询 | mcp_tool |
+| **酒店助手** | 酒店搜索、价格对比 | aigohotel-mcp |
+| **搜索助手** | 互联网信息检索 | zhipu_search |
+| **文件助手** | 文件读写、数据存储 | 本地文件系统 |
 
 ### 3. 人工介入机制
 
@@ -146,73 +174,96 @@ Replan 阶段会自动检测信息完整性：
 
 ### 整体流程图
 
+```mermaid
+flowchart TD
+    %% 定义节点样式
+    classDef startend fill:#2ecc71,stroke:#27ae60,stroke-width:3px,color:#fff
+    classDef process fill:#3498db,stroke:#2980b9,stroke-width:2px,color:#fff
+    classDef decision fill:#f39c12,stroke:#e67e22,stroke-width:2px,color:#fff
+    classDef wait fill:#e74c3c,stroke:#c0392b,stroke-width:2px,color:#fff
+    classDef loopStyle fill:#f8f9fa,stroke:#bdc3c7,stroke-width:2px,stroke-dasharray: 5 5
+
+    %% 开始节点
+    START([开始])
+
+    %% 路由决策
+    ROUTER{resume_router<br/>判断恢复点}
+
+    %% Plan 阶段
+    PLAN[/PLAN 生成任务规划/]
+
+    %% Plan 人工介入检查
+    CHECK_P{需要<br/>人工介入?}
+
+    %% 等待用户响应 Plan
+    WAIT_P[wait_user_plan<br/>⏸ 暂停等待]
+
+    %% Execute 阶段
+    EXECUTE[/EXECUTE 多Agent执行任务/]
+
+    %% Replan 阶段
+    REPLAN[/REPLAN 生成旅游攻略/]
+
+    %% Replan 人工介入检查
+    CHECK_R{需要<br/>人工介入?}
+
+    %% 等待用户响应 Replan
+    WAIT_R[wait_user_replan<br/>⏸ 暂停等待]
+
+    %% 补充检查
+    CHECK_S{需要<br/>补充执行?}
+
+    %% 结束
+    END([结束])
+
+    %% 流程连接
+    START --> ROUTER
+
+    ROUTER -->|首次执行| PLAN
+    ROUTER -.->|从Plan恢复| EXECUTE
+    ROUTER -.->|从Replan恢复| CHECK_S
+
+    PLAN --> CHECK_P
+    CHECK_P -->|需要| WAIT_P
+    CHECK_P -->|不需要| EXECUTE
+
+    WAIT_P --> END
+
+    EXECUTE --> REPLAN
+
+    REPLAN --> CHECK_R
+    CHECK_R -->|需要| WAIT_R
+    CHECK_R -->|不需要| CHECK_S
+
+    WAIT_R --> END
+
+    CHECK_S -->|需要 且 count<2| EXECUTE
+    CHECK_S -->|不需要 或 count≥2| END
+
+    %% 应用样式
+    class START,END startend
+    class ROUTER,CHECK_P,CHECK_R,CHECK_S decision
+    class PLAN,EXECUTE,REPLAN process
+    class WAIT_P,WAIT_R wait
+
+    %% 补充循环区域
+    classDef regionStyle fill:#fff3cd,stroke:#ffc107,stroke-width:1px,stroke-dasharray: 5 5
 ```
-                    ┌──────────────────┐
-                    │     START        │
-                    └────────┬─────────┘
-                             │
-                             ▼
-                    ┌──────────────────┐
-                    │  resume_router   │◄───────┐
-                    │ (路由决策节点)    │        │
-                    └────────┬─────────┘        │
-                             │                  │
-                             ▼                  │
-                    ┌──────────────────┐        │
-                    │      PLAN        │        │
-                    │  (生成任务规划)    │        │
-                    └────────┬─────────┘        │
-                             │                  │
-                             ▼                  │
-              ┌─────────────────────────┐       │
-              │ check_intervention_plan  │       │
-              │   (检查是否需要人工介入)  │       │
-              └────┬───────────────┬─────┘       │
-                   │               │             │
-            [需要介入]         [不需要]          │
-                   │               │             │
-                   ▼               ▼             │
-          ┌──────────────┐  ┌──────────┐        │
-          │ wait_user_   │  │ EXECUTE  │        │
-          │    plan      │  │(多Agent  │        │
-          │ (等待用户响应) │  │ 执行任务) │        │
-          └──────┬───────┘  └────┬─────┘        │
-                 │               │             │
-                 │         ┌─────┴─────┐        │
-                 │         │           │        │
-                 │         ▼           │        │
-                 │  ┌──────────────┐  │        │
-                 │  │   REPLAN     │  │        │
-                 │  │ (生成旅游攻略) │  │        │
-                 │  └──────┬───────┘  │        │
-                 │         │           │        │
-                 │         ▼           │        │
-                 │  ┌─────────────────┤         │
-                 │  │check_intervention│         │
-                 │  │   _after_replan  │         │
-                 │  └───┬──────────┬───┘         │
-                 │      │          │             │
-                 │   [需要介入]  [不需要]         │
-                 │      │          │             │
-                 │      ▼          ▼             │
-                 │ ┌─────────┐ ┌──────────────┐  │
-                 │ │wait_user│ │check_supplement│ │
-                 │ │_replan  │ │(检查补充执行) │  │
-                 │ └────┬────┘ └──┬───────────┘  │
-                 │      │          │             │
-                 │      │    ┌─────┴─────┐       │
-                 │      │    │           │       │
-                 │      │ [需要补充]  [完整]      │
-                 │      │    │           │       │
-                 │      │    ▼           ▼       │
-                 │      │ ┌─────────┐ ┌─────┐   │
-                 │      └─│ EXECUTE │ │ END │◄──┘
-                 │      │ └─────────┘ └─────┘
-                 │      │     ▲
-                 │      └─────┘ (补充循环)
-                 │
-                 └───(用户响应后恢复流程)
-```
+
+**流程说明**：
+
+1. **START → ROUTER**: 流程开始，进入路由决策
+2. **ROUTER → PLAN**: 首次执行，进入 Plan 阶段
+3. **PLAN → CHECK_P**: 生成规划后，检查是否需要人工介入
+4. **CHECK_P → WAIT_P**: 需要介入，暂停等待用户响应
+5. **CHECK_P → EXECUTE**: 不需要介入，直接执行
+6. **EXECUTE → REPLAN**: 执行完成后进入 Replan
+7. **REPLAN → CHECK_R**: 检查是否需要人工介入
+8. **CHECK_R → WAIT_R**: 需要介入，暂停等待
+9. **CHECK_R → CHECK_S**: 不需要介入，检查是否需要补充
+10. **CHECK_S → EXECUTE**: 需要补充且未达上限，返回 Execute（补充循环）
+11. **CHECK_S → END**: 不需要补充或已达上限，流程结束
+12. **用户响应后**: 从 WAIT_P/WAIT_R 恢复，通过 ROUTER 重新进入相应阶段
 
 ### 核心节点说明
 

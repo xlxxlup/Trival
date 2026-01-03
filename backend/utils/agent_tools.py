@@ -27,7 +27,7 @@ async def retry_llm_call(
         max_retries: 最大重试次数（默认1次）
         retry_delay: 重试间隔秒数（默认1秒）
         error_context: 错误上下文描述，用于日志
-        fallback_model: 降级模型列表（按顺序依次尝试），如果为None则使用默认列表["gemini-3-flash-preview", "gpt-4o-mini"]
+        fallback_model: 降级模型列表（按顺序依次尝试），如果为None则使用默认列表["gpt-4.1"]
         **kwargs: 传递给llm_func的关键字参数
 
     Returns:
