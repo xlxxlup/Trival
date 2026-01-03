@@ -814,9 +814,9 @@ async def replan(state:AmusementState)->AmusementState:
     logger.info(f"当前人工介入次数: {state.get('intervention_count', 0)}")
 
     # 打印工具调用结果（仅ToolMessage）
-    for msg in state.get("messages", []):
-        if isinstance(msg, ToolMessage):
-            logger.info(f"🔧 工具调用结果: {msg.content[:500]}..." if len(str(msg.content)) > 500 else f"🔧 工具调用结果: {msg.content}")
+    # for msg in state.get("messages", []):
+    #     if isinstance(msg, ToolMessage):
+    #         logger.info(f"🔧 工具调用结果: {msg.content[:500]}..." if len(str(msg.content)) > 500 else f"🔧 工具调用结果: {msg.content}")
 
     # 获取当前已收集信息
     collected_info = state.get("collected_info", {})

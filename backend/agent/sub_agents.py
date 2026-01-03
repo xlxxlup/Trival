@@ -158,7 +158,7 @@ class BaseSubAgent:
                 break
 
             # 将响应加入历史
-            task_messages = current_messages + [response]
+            task_messages = current_messages + [response] #记录每一个子任务的上下文
 
             # 保存最后一次响应的内容（用于总结任务）
             if hasattr(response, 'content') and response.content:
@@ -232,7 +232,7 @@ class BaseSubAgent:
 
             extra_rounds = 2  # 最多额外2轮
             for extra_round in range(1, extra_rounds + 1):
-                # 检查任务是否完成
+                # 检查子任务是否完成
                 completion_result = await self._check_task_completion(task, context, all_tool_messages)
                 completion_status = completion_result["completed"]
                 completion_reason = completion_result["reason"]
@@ -550,7 +550,7 @@ class BaseSubAgent:
 
         # 根据任务类型添加特定关键词
         if '机票' in task or '航班' in task or 'flight' in task_lower:
-            query_parts.extend([origin, '机票', date if date else '2025'])
+            query_parts.extend([origin, '机票', date if date else '2026'])
             # 根据未完成原因添加针对性关键词
             if '价格' in reason_lower:
                 query_parts.extend(['价格', '票价', '费用'])
@@ -561,7 +561,7 @@ class BaseSubAgent:
             else:
                 query_parts.extend(['价格', '航班', '时间'])
         elif '火车' in task or '高铁' in task or 'train' in task_lower:
-            query_parts.extend([origin, '火车票', '高铁', date if date else '2025'])
+            query_parts.extend([origin, '火车票', '高铁', date if date else '2026'])
             # 根据未完成原因添加针对性关键词
             if '价格' in reason_lower:
                 query_parts.extend(['票价', '价格'])
@@ -572,7 +572,7 @@ class BaseSubAgent:
             else:
                 query_parts.extend(['车次', '价格', '时间'])
         elif '酒店' in task or 'hotel' in task_lower or '住宿' in task:
-            query_parts.extend(['酒店', '住宿', date if date else '2025'])
+            query_parts.extend(['酒店', '住宿', date if date else '2026'])
             # 根据未完成原因添加针对性关键词
             if '价格' in reason_lower:
                 query_parts.extend(['价格', '房价'])
@@ -583,7 +583,7 @@ class BaseSubAgent:
             else:
                 query_parts.extend(['价格', '推荐'])
         elif '天气' in task or 'weather' in task_lower:
-            query_parts.extend(['天气', date if date else '2025'])
+            query_parts.extend(['天气', date if date else '2026'])
             # 根据未完成原因添加针对性关键词
             if '温度' in reason_lower:
                 query_parts.extend(['温度', '气温'])
@@ -592,7 +592,7 @@ class BaseSubAgent:
             else:
                 query_parts.extend(['温度', '天气预报'])
         elif '景点' in task or '旅游' in task or '游览' in task:
-            query_parts.extend(['旅游景点', '2025'])
+            query_parts.extend(['旅游景点', '2026'])
             # 根据未完成原因添加针对性关键词
             if '门票' in reason_lower or '价格' in reason_lower:
                 query_parts.extend(['门票价格'])
@@ -603,7 +603,7 @@ class BaseSubAgent:
             else:
                 query_parts.extend(['门票', '开放时间', '推荐'])
         elif '美食' in task or '餐厅' in task or '吃' in task:
-            query_parts.extend(['美食', '餐厅', '2025'])
+            query_parts.extend(['美食', '餐厅', '2026'])
             # 根据未完成原因添加针对性关键词
             if '推荐' in reason_lower:
                 query_parts.extend(['推荐', '特色'])
@@ -613,7 +613,7 @@ class BaseSubAgent:
                 query_parts.extend(['推荐', '特色'])
         else:
             # 默认通用搜索
-            query_parts.extend(['信息', '推荐', '攻略', '2025'])
+            query_parts.extend(['信息', '推荐', '攻略', '2026'])
 
         # 添加预算信息
         if budget:
@@ -641,7 +641,7 @@ class BaseSubAgent:
 
         # 确保query不为空
         if not search_query:
-            search_query = f"{destination} {task} 2025"
+            search_query = f"{destination} {task} 2026"
 
         logger.debug(f"  [{self.name}] 构建的补全搜索query: {search_query}")
         if incomplete_reason:
