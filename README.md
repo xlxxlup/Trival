@@ -362,7 +362,7 @@ ZHIPU_SEARCH=your-search-key
 |---------|---------|---------|
 | **高德地图** | POI搜索、路线规划 | [amap-maps](https://www.modelscope.cn/mcp/servers/@amap/amap-maps) |
 | **12306火车票** | 火车票查询 | [12306-mcp](https://www.modelscope.cn/mcp/servers/@Joooook/12306-mcp) |
-| **航班查询** | 机票查询 | [FlightTicketMCP](https://www.modelscope.cn/mcp/servers/nieli0724/FlightTicketMCPMCPAgentChallenge1) |
+| **航班查询** | 机票查询 | [Variflight-MCP](https://www.modelscope.cn/mcp/servers/@variflight-ai/variflight-mcp) |
 | **天气查询** | 天气预报 | [mcp_tool](https://www.modelscope.cn/mcp/servers/@MrCare/mcp_tool) |
 | **酒店查询** | 酒店搜索 | [AI_Go_Hotel_MCP](https://www.modelscope.cn/mcp/servers/yorklu/AI_Go_Hotel_MCP) |
 | **智谱搜索** | 互联网搜索 | [智谱AI文档](https://docs.bigmodel.cn/cn/guide/tools/web-search) |
